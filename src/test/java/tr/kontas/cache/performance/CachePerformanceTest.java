@@ -9,7 +9,6 @@ import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.Iterator;
 import java.util.Random;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
@@ -54,7 +53,8 @@ public class CachePerformanceTest {
                 .shardCapacity(100_000)
                 .memoryCacheSize(0)
                 .defaultMaxKeyBytes(32)
-                .defaultMaxValueBytes(64);
+                .defaultMaxValueBytes(64)
+                .chronicleAverageKey("key-00000000");
 
         CacheManager.initialize(builder);
 

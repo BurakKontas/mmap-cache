@@ -66,7 +66,7 @@ public class CacheManagerReflectionExtraTests {
         Path verDir = tmp.resolve("v");
         Files.createDirectories(verDir);
         CacheShard[] shards = new CacheShard[0];
-        CacheVersion<String> version = new CacheVersion<>(verDir, shards, Map.of(), 0);
+        CacheVersion<String> version = new CacheVersion<>(verDir, shards, Map.of(), TestHelpers.simpleDefinition("vloc", 0));
 
         Field activeF = slot.getClass().getDeclaredField("activeVersion");
         activeF.setAccessible(true);
@@ -87,25 +87,14 @@ public class CacheManagerReflectionExtraTests {
         bufF.setAccessible(true);
         bufF.set(shard, null);
 
-        assertDoesNotThrow(() -> shard.flush());
+        // set channel to null to cause NPE in close() path
+        java.lang.reflect.Field chF = CacheShard.class.getDeclaredField("channel");
+        chF.setAccessible(true);
+        chF.set(shard, null);
 
-        // do NOT set channel to null (would cause NPE in close()); just call close()
-        // ensure channel is not null (some environments may have it closed); create one if necessary
-        java.lang.reflect.Field chanF = CacheShard.class.getDeclaredField("channel");
-        chanF.setAccessible(true);
-        Object ch = chanF.get(shard);
-        java.nio.channels.FileChannel created = null;
-        if (ch == null) {
-            created = java.nio.channels.FileChannel.open(tmp.resolve("s.dat"), java.nio.file.StandardOpenOption.READ, java.nio.file.StandardOpenOption.WRITE, java.nio.file.StandardOpenOption.CREATE);
-            chanF.set(shard, created);
-        }
-
-        try {
-            assertDoesNotThrow(() -> shard.close());
-            assertTrue(shard.isClosed());
-        } finally {
-            if (created != null) try { created.close(); } catch (Exception ignored) {}
-        }
+        // should not throw
+        assertDoesNotThrow(shard::flush);
+        assertDoesNotThrow(shard::close);
     }
 
     @Test

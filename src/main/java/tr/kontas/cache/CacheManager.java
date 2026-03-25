@@ -1,33 +1,29 @@
 package tr.kontas.cache;
 
 import lombok.extern.slf4j.Slf4j;
+import net.openhft.chronicle.map.ChronicleMapBuilder;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 @Slf4j
 public final class CacheManager {
-    // manager-wide defaults (configured via Builder)
-    private final int shardCapacity;
-    private final int memoryCacheSize;
-    private final int defaultMaxKeyBytes;
-    private final int defaultMaxValueBytes;
 
+    // ── Background threads ───────────────────────────────────────────────────
     private static final ScheduledExecutorService TTL_SCHEDULER =
             Executors.newSingleThreadScheduledExecutor(r -> {
                 Thread t = new Thread(r, "cache-ttl-scheduler");
                 t.setDaemon(true);
                 return t;
             });
+
     private static final ExecutorService RELOAD_EXECUTOR =
             Executors.newCachedThreadPool(r -> {
                 Thread t = new Thread(r, "cache-reload-worker");
@@ -35,16 +31,34 @@ public final class CacheManager {
                 return t;
             });
 
+    // ── Singleton ────────────────────────────────────────────────────────────
     private static volatile CacheManager INSTANCE;
-    private final ConcurrentHashMap<String, CacheSlot<?>> slots = new ConcurrentHashMap<>();
-    private final Path basePath;
 
-    private CacheManager(Path basePath, int shardCapacity, int memoryCacheSize, int defaultMaxKeyBytes, int defaultMaxValueBytes) {
+    // ── Manager config ───────────────────────────────────────────────────────
+    private final Path basePath;
+    private final int shardCapacity;
+    private final int defaultMaxKeyBytes;
+    private final int defaultMaxValueBytes;
+    private final int memoryCacheSize;
+    private final String chronicleAverageKey;
+
+    private final ConcurrentHashMap<String, CacheSlot<?>> slots = new ConcurrentHashMap<>();
+
+    // ── Constructor ──────────────────────────────────────────────────────────
+    private CacheManager(
+            Path basePath,
+            int shardCapacity,
+            int defaultMaxKeyBytes,
+            int defaultMaxValueBytes,
+            int memoryCacheSize,
+            String chronicleAverageKey
+    ) {
         this.basePath = basePath;
         this.shardCapacity = shardCapacity;
-        this.memoryCacheSize = memoryCacheSize;
         this.defaultMaxKeyBytes = defaultMaxKeyBytes;
         this.defaultMaxValueBytes = defaultMaxValueBytes;
+        this.memoryCacheSize = memoryCacheSize;
+        this.chronicleAverageKey = chronicleAverageKey;
 
         TTL_SCHEDULER.scheduleWithFixedDelay(
                 this::checkTtlExpiry,
@@ -52,13 +66,16 @@ public final class CacheManager {
         );
     }
 
-    /**
-     * Convenience initializer with sensible defaults. If you need custom shard/memory/default sizes,
-     * use the {@link Builder} and {@link #initialize(Builder)} instead.
-     */
+    // ── Static init ──────────────────────────────────────────────────────────
     public static synchronized void initialize(Path basePath) {
-        // defaults: shardCapacity=1000, memoryCacheSize=500, default key/value as in CacheDefinition
-        INSTANCE = new CacheManager(basePath, 1000, 500, CacheDefinition.DEFAULT_MAX_KEY_BYTES, CacheDefinition.DEFAULT_MAX_VALUE_BYTES);
+        INSTANCE = new CacheManager(
+                basePath,
+                1000,
+                CacheDefinition.DEFAULT_MAX_KEY_BYTES,
+                CacheDefinition.DEFAULT_MAX_VALUE_BYTES,
+                0,
+                "key-00000000"
+        );
         purgeStaleVersions(basePath);
     }
 
@@ -67,7 +84,6 @@ public final class CacheManager {
         initialize(baseDir.toPath());
     }
 
-    /** Initialize via builder (preferred when you want to customize capacities/defaults). */
     public static synchronized void initialize(Builder builder) {
         if (builder == null) throw new IllegalArgumentException("builder cannot be null");
         INSTANCE = builder.build();
@@ -78,55 +94,24 @@ public final class CacheManager {
         return new Builder(basePath);
     }
 
-    public static final class Builder {
-        private final Path basePath;
-        private int shardCapacity = 1000;
-        private int memoryCacheSize = 500;
-        private int defaultMaxKeyBytes = CacheDefinition.DEFAULT_MAX_KEY_BYTES;
-        private int defaultMaxValueBytes = CacheDefinition.DEFAULT_MAX_VALUE_BYTES;
-
-        public Builder(Path basePath) {
-            if (basePath == null) throw new IllegalArgumentException("basePath cannot be null");
-            this.basePath = basePath;
-        }
-
-        public Builder shardCapacity(int shardCapacity) {
-            this.shardCapacity = shardCapacity;
-            return this;
-        }
-
-        public Builder memoryCacheSize(int memoryCacheSize) {
-            this.memoryCacheSize = memoryCacheSize;
-            return this;
-        }
-
-        public Builder defaultMaxKeyBytes(int bytes) {
-            this.defaultMaxKeyBytes = bytes;
-            return this;
-        }
-
-        public Builder defaultMaxValueBytes(int bytes) {
-            this.defaultMaxValueBytes = bytes;
-            return this;
-        }
-
-        public CacheManager build() {
-            return new CacheManager(basePath, shardCapacity, memoryCacheSize, defaultMaxKeyBytes, defaultMaxValueBytes);
-        }
-    }
-
+    // ── Public API ───────────────────────────────────────────────────────────
     public static <V> void register(CacheDefinition<V> definition) {
         CacheManager mgr = requireInstance();
 
-        // apply manager-wide defaults only when the definition hasn't overridden them
         CacheDefinition<V> effective = definition;
         if (!definition.isDynamicSizing()) {
             CacheDefinition.CacheDefinitionBuilder<V> b = definition.toBuilder();
-            if (definition.getMaxKeyBytes() == CacheDefinition.DEFAULT_MAX_KEY_BYTES && mgr.defaultMaxKeyBytes != CacheDefinition.DEFAULT_MAX_KEY_BYTES) {
+            if (definition.getMaxKeyBytes() == CacheDefinition.DEFAULT_MAX_KEY_BYTES
+                    && mgr.defaultMaxKeyBytes != CacheDefinition.DEFAULT_MAX_KEY_BYTES) {
                 b.maxKeyBytes(mgr.defaultMaxKeyBytes);
             }
-            if (definition.getMaxValueBytes() == CacheDefinition.DEFAULT_MAX_VALUE_BYTES && mgr.defaultMaxValueBytes != CacheDefinition.DEFAULT_MAX_VALUE_BYTES) {
+            if (definition.getMaxValueBytes() == CacheDefinition.DEFAULT_MAX_VALUE_BYTES
+                    && mgr.defaultMaxValueBytes != CacheDefinition.DEFAULT_MAX_VALUE_BYTES) {
                 b.maxValueBytes(mgr.defaultMaxValueBytes);
+            }
+            // Apply manager-wide memory cache default if definition didn't set its own
+            if (definition.getMemoryCacheMaxSize() == 0 && mgr.memoryCacheSize > 0) {
+                b.memoryCacheMaxSize(mgr.memoryCacheSize);
             }
             effective = b.build();
         }
@@ -147,10 +132,10 @@ public final class CacheManager {
         return getFromSlot(slot, key);
     }
 
-    @SuppressWarnings("unchecked")
     public static void reload(String cacheName) {
         CacheSlot<?> slot = requireInstance().slots.get(cacheName);
         if (slot == null) throw new IllegalArgumentException("Unknown cache: " + cacheName);
+        //noinspection unchecked
         requireInstance().doReload((CacheSlot<Object>) slot, "manual");
     }
 
@@ -158,13 +143,16 @@ public final class CacheManager {
         RELOAD_EXECUTOR.submit(() -> reload(cacheName));
     }
 
+    // ── Internal read ────────────────────────────────────────────────────────
     private static <V> V getFromSlot(CacheSlot<V> slot, String key) {
         CacheVersion<V> version = slot.activeVersion;
         if (version == null) return null;
 
-        V cached = version.getMemoryCache().get(key);
+        // 1. Caffeine in-memory katmanı
+        V cached = version.getFromMemory(key);
         if (cached != null) return cached;
 
+        // 2. Off-heap Chronicle index → mmap shard
         version.acquireReader();
         try {
             CacheLocation loc = version.getIndex().get(key);
@@ -173,20 +161,33 @@ public final class CacheManager {
             CacheEntry entry = version.getShards()[loc.shardId()].read(loc.offset());
             V value = slot.definition.getDeserializer().apply(entry.getValueBytes());
 
-            version.getMemoryCache().put(key, value);
+            version.putToMemory(key, value);
             return value;
         } finally {
             version.releaseReader();
         }
     }
 
+    // ── Chronicle Map ────────────────────────────────────────────────────────
+    private static Map<String, CacheLocation> buildChronicleIndex(
+            Path file, int expectedEntries, String averageKey
+    ) throws IOException {
+        int entries = Math.max(expectedEntries, 1);
+        return ChronicleMapBuilder
+                .of(String.class, CacheLocation.class)
+                .name("cache-index")
+                .averageKey(averageKey)
+                .entries(entries)
+                .averageValueSize(8)
+                .createPersistedTo(file.toFile());
+    }
+
+    // ── Stale purge ──────────────────────────────────────────────────────────
     private static void purgeStaleVersions(Path basePath) {
         if (!Files.exists(basePath)) return;
-
         try {
             Files.list(basePath).forEach(cacheDir -> {
                 if (!Files.isDirectory(cacheDir)) return;
-
                 try {
                     Files.list(cacheDir)
                             .filter(Files::isDirectory)
@@ -222,6 +223,7 @@ public final class CacheManager {
         return inst;
     }
 
+    // ── Reload ───────────────────────────────────────────────────────────────
     private <V> void doReload(CacheSlot<V> slot, String trigger) {
         if (!slot.reloading.compareAndSet(false, true)) {
             log.info("Reload already in progress for cache '{}'", slot.definition.getName());
@@ -229,8 +231,6 @@ public final class CacheManager {
         }
 
         String name = slot.definition.getName();
-
-        boolean success = false;
 
         try {
             Path cacheDir = basePath.resolve(name);
@@ -240,6 +240,7 @@ public final class CacheManager {
             Path versionDir = cacheDir.resolve("v" + versionTs);
             Files.createDirectories(versionDir);
 
+            // ── Veriyi topla ─────────────────────────────────────────────────
             List<CacheRow> rows;
             try (var stream = slot.definition.getSupplier().get()) {
                 rows = stream.collect(Collectors.toList());
@@ -247,7 +248,7 @@ public final class CacheManager {
 
             int total = rows.size();
 
-            // --- sizing ---
+            // ── Dinamik boyutlandırma ────────────────────────────────────────
             final int maxKeyBytes;
             final int maxValueBytes;
             if (slot.definition.isDynamicSizing() && total > 0) {
@@ -258,46 +259,51 @@ public final class CacheManager {
                     maxK = Math.max(maxK, k.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
                     maxV = Math.max(maxV, v.length);
                 }
-                // add 25% headroom so small additions don't force a full schema change
                 maxKeyBytes = (int) (maxK * 1.25) + 1;
                 maxValueBytes = (int) (maxV * 1.25) + 1;
-                log.info("Cache '{}': dynamic sizing → maxKeyBytes={}, maxValueBytes={}", name, maxKeyBytes, maxValueBytes);
+                log.info("Cache '{}': dynamic sizing → maxKeyBytes={}, maxValueBytes={}",
+                        name, maxKeyBytes, maxValueBytes);
             } else {
                 maxKeyBytes = slot.definition.getMaxKeyBytes();
                 maxValueBytes = slot.definition.getMaxValueBytes();
             }
-            int recordSize = slot.definition.recordSize(maxKeyBytes, maxValueBytes);
-            // --- /sizing ---
 
+            int recordSize = slot.definition.recordSize(maxKeyBytes, maxValueBytes);
             int shardCount = Math.max(1, (int) Math.ceil((double) total / shardCapacity));
 
             log.info("Cache '{}': {} rows → {} shard(s)", name, total, shardCount);
 
+            // ── Shardları oluştur ────────────────────────────────────────────
             CacheShard[] newShards = new CacheShard[shardCount];
             for (int i = 0; i < shardCount; i++) {
                 int shardSize = (i < shardCount - 1)
                         ? shardCapacity
                         : total - (i * shardCapacity);
-
                 Path shardPath = versionDir.resolve(String.format("shard_%04d.dat", i));
                 newShards[i] = new CacheShard(shardPath, recordSize, shardSize, maxKeyBytes, maxValueBytes);
             }
 
-            Map<String, CacheLocation> newIndex = new HashMap<>((int) (total * 1.3));
+            // ── Chronicle Map index ──────────────────────────────────────────
+            Path chronicleFile = versionDir.resolve("index.chm");
+            Map<String, CacheLocation> newIndex = buildChronicleIndex(
+                    chronicleFile, total, chronicleAverageKey
+            );
 
+            // ── Yaz & indeksle ───────────────────────────────────────────────
             for (int i = 0; i < total; i++) {
                 CacheRow row = rows.get(i);
                 int shardId = i / shardCapacity;
                 int offset = i % shardCapacity;
-
                 String key = slot.definition.getKeyExtractor().apply(row);
                 byte[] valueBytes = slot.definition.getSerializer().apply(row);
 
-                CacheEntry entry = new CacheEntry(i + 1L, versionTs, key, valueBytes, maxKeyBytes, maxValueBytes);
+                CacheEntry entry = new CacheEntry(
+                        i + 1L, versionTs, key, valueBytes, maxKeyBytes, maxValueBytes
+                );
 
                 boolean written = newShards[shardId].write(offset, entry);
                 if (!written) {
-                    log.warn("Cache '{}': skipping entry for key '{}' (value too large)", name, key);
+                    log.warn("Cache '{}': skipping key '{}' (value too large)", name, key);
                     continue;
                 }
                 newIndex.put(key, new CacheLocation(shardId, offset));
@@ -305,22 +311,19 @@ public final class CacheManager {
 
             for (CacheShard shard : newShards) shard.flush();
 
+            // ── Yeni versiyonu aktifleştir ───────────────────────────────────
+            // CacheVersion artık Caffeine cache'i kendi inşa ediyor; definition'dan alıyor.
             CacheVersion<V> newVersion = new CacheVersion<>(
-                    versionDir,
-                    newShards,
-                    Collections.unmodifiableMap(newIndex),
-                    memoryCacheSize
+                    versionDir, newShards, newIndex, slot.definition
             );
 
             CacheVersion<V> oldVersion = slot.activeVersion;
             slot.activeVersion = newVersion;
 
-
             log.info("Cache '{}' reloaded. version={}, shards={}, entries={}",
                     name, versionDir.getFileName(), shardCount, total);
 
-            cleanupOldVersion(name, oldVersion, versionDir);
-            success = true;
+            cleanupOldVersion(name, oldVersion);
 
         } catch (Exception e) {
             log.error("Reload failed for cache '{}'", name, e);
@@ -330,23 +333,25 @@ public final class CacheManager {
         }
     }
 
+    // ── TTL (cache reload) ───────────────────────────────────────────────────
     private void checkTtlExpiry() {
         long now = System.currentTimeMillis();
         for (CacheSlot<?> slot : slots.values()) {
             CacheVersion<?> v = slot.activeVersion;
             if (v == null) continue;
 
-            long ttlMs = slot.definition.getTtl().toMillis();
-            if (ttlMs <= 0) continue;
+            var ttl = slot.definition.getTtl();
+            if (ttl == null || ttl.isZero() || ttl.isNegative()) continue;
 
-            if (now - v.getCreatedAt() >= ttlMs) {
+            if (now - v.getCreatedAt() >= ttl.toMillis()) {
                 log.info("Cache '{}' TTL expired, scheduling async reload.", slot.definition.getName());
                 RELOAD_EXECUTOR.submit(() -> doReload(slot, "ttl"));
             }
         }
     }
 
-    private <V> void cleanupOldVersion(String cacheName, CacheVersion<V> old, Path currentVersionDir) {
+    // ── Cleanup ──────────────────────────────────────────────────────────────
+    private <V> void cleanupOldVersion(String cacheName, CacheVersion<V> old) {
         if (old == null) return;
 
         new Thread(() -> {
@@ -373,6 +378,58 @@ public final class CacheManager {
         }, "cache-cleanup-" + cacheName).start();
     }
 
+    // ── Builder ──────────────────────────────────────────────────────────────
+    public static final class Builder {
+        private final Path basePath;
+        private int shardCapacity = 1000;
+        private int defaultMaxKeyBytes = CacheDefinition.DEFAULT_MAX_KEY_BYTES;
+        private int defaultMaxValueBytes = CacheDefinition.DEFAULT_MAX_VALUE_BYTES;
+        private int memoryCacheSize = 0;
+        private String chronicleAverageKey = "key-00000000";
+
+        public Builder(Path basePath) {
+            if (basePath == null) throw new IllegalArgumentException("basePath cannot be null");
+            this.basePath = basePath;
+        }
+
+        public Builder shardCapacity(int v) {
+            this.shardCapacity = v;
+            return this;
+        }
+
+        public Builder defaultMaxKeyBytes(int v) {
+            this.defaultMaxKeyBytes = v;
+            return this;
+        }
+
+        public Builder defaultMaxValueBytes(int v) {
+            this.defaultMaxValueBytes = v;
+            return this;
+        }
+
+        public Builder memoryCacheSize(int v) {
+            if (v < 0) throw new IllegalArgumentException("memoryCacheSize cannot be negative");
+            this.memoryCacheSize = v;
+            return this;
+        }
+
+        public Builder chronicleAverageKey(String v) {
+            if (v == null || v.isEmpty()) throw new IllegalArgumentException("chronicleAverageKey cannot be blank");
+            this.chronicleAverageKey = v;
+            return this;
+        }
+
+        public CacheManager build() {
+            return new CacheManager(
+                    basePath, shardCapacity,
+                    defaultMaxKeyBytes, defaultMaxValueBytes,
+                    memoryCacheSize,
+                    chronicleAverageKey
+            );
+        }
+    }
+
+    // ── CacheSlot ────────────────────────────────────────────────────────────
     private static final class CacheSlot<V> {
         final CacheDefinition<V> definition;
         final AtomicBoolean reloading = new AtomicBoolean(false);

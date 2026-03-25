@@ -31,8 +31,6 @@ public class CacheCoverageRemainingGettersTests {
         assertEquals(2L, e.getTimestamp());
         assertEquals("k", e.getKey());
         assertArrayEquals(v, e.getValueBytes());
-        assertTrue(e.getMaxKeyBytes() > 0);
-        assertTrue(e.getMaxValueBytes() > 0);
 
         // CacheRow getters
         CacheRow r = new CacheRow("t", "kk", "vv");
@@ -50,12 +48,9 @@ public class CacheCoverageRemainingGettersTests {
         shard.close();
 
         // CacheVersion getters
-        CacheVersion<String> vrs = new CacheVersion<>(tmp, new CacheShard[0], Map.of(), 2);
-        assertEquals(2, vrs.getMemoryCacheSize());
+        CacheVersion<String> vrs = new CacheVersion<>(tmp, new CacheShard[0], Map.of(), TestHelpers.simpleDefinition("cv2", 2));
+        // memoryCacheMaxSize was set to 2 so memoryCache should exist
+        assertNotNull(vrs.getMemoryCache());
         assertNotNull(vrs.getReaderCount());
-
-        // CacheLocation toString/equals already covered, but call to be safe
-        CacheLocation loc = new CacheLocation(1, 2);
-        assertTrue(loc.toString().contains("shardId"));
     }
 }

@@ -1,6 +1,5 @@
 package tr.kontas.cache;
 
-
 import lombok.Builder;
 import lombok.Getter;
 
@@ -16,13 +15,20 @@ public final class CacheDefinition<V> {
     public static final int DEFAULT_MAX_KEY_BYTES = 256;
     public static final int DEFAULT_MAX_VALUE_BYTES = 1024;
 
+    // ── Temel tanım ──────────────────────────────────────────────────────────
     private final String name;
     private final Supplier<Stream<CacheRow>> supplier;
     private final Function<CacheRow, String> keyExtractor;
     private final Function<CacheRow, byte[]> serializer;
     private final Function<byte[], V> deserializer;
+
+    /**
+     * Tüm cache versiyonunun yenileneceği süre (supplier yeniden çağrılır).
+     * Null veya Duration.ZERO ise otomatik yenileme yapılmaz.
+     */
     private final Duration ttl;
 
+    // ── Shard / kayıt boyutu ─────────────────────────────────────────────────
     @Builder.Default
     private final boolean dynamicSizing = false;
 
@@ -32,6 +38,34 @@ public final class CacheDefinition<V> {
     @Builder.Default
     private final int maxValueBytes = DEFAULT_MAX_VALUE_BYTES;
 
+    // ── Caffeine in-memory katmanı ───────────────────────────────────────────
+
+    /**
+     * Caffeine cache'inin maksimum eleman sayısı.
+     * 0 verilirse in-memory katman devre dışı kalır; her okuma doğrudan
+     * mmap shard'a gider.
+     */
+    @Builder.Default
+    private final int memoryCacheMaxSize = 0;
+
+    /**
+     * Caffeine write-after TTL: bir eleman bu süre sonra cache'den düşer
+     * ve bir sonraki okumada shard'dan yeniden yüklenir.
+     * Null verilirse entry'ler yalnızca {@code memoryCacheMaxSize} dolunca
+     * LRU politikasıyla çıkarılır; zamanlı çıkarma olmaz.
+     */
+    @Builder.Default
+    private final Duration memoryCacheTtl = null;
+
+    /**
+     * Caffeine expire-after-access: son erişimden bu kadar süre sonra
+     * entry cache'den düşer. Null verilirse aktif değildir.
+     * {@code memoryCacheTtl} ile birlikte kullanılabilir.
+     */
+    @Builder.Default
+    private final Duration memoryCacheIdleTtl = null;
+
+    // ── Yardımcılar ──────────────────────────────────────────────────────────
     public static Function<CacheRow, byte[]> defaultSerializer() {
         return row -> {
             String s = row.getValueAsString();
@@ -48,7 +82,6 @@ public final class CacheDefinition<V> {
     }
 
     public int recordSize() {
-        // id(8) + keyLen(2) + key(maxKeyBytes) + valueLen(2) + value(maxValueBytes) + timestamp(8)
         return Long.BYTES + Short.BYTES + maxKeyBytes
                 + Short.BYTES + maxValueBytes + Long.BYTES;
     }

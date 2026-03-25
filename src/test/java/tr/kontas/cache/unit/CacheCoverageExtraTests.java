@@ -93,7 +93,7 @@ public class CacheCoverageExtraTests {
 
         CacheShard[] shards = new CacheShard[1];
         shards[0] = throwing;
-        CacheVersion<String> v = new CacheVersion<>(tmp, shards, Map.of(), 0);
+        CacheVersion<String> v = new CacheVersion<>(tmp, shards, Map.of(), TestHelpers.simpleDefinition("vtest", 0));
 
         // call close - should catch exception and not propagate
         assertDoesNotThrow(v::close);
@@ -103,14 +103,14 @@ public class CacheCoverageExtraTests {
     void cacheLocation_sameShardDifferentOffset_branch() {
         CacheLocation a = new CacheLocation(1, 2);
         CacheLocation b = new CacheLocation(1, 3);
-        assertFalse(a.equals(b)); // same shardId true, offset different -> left true right false
+        assertNotEquals(a, b); // same shardId true, offset different -> left true right false
     }
 
     @Test
     void cacheVersion_threeArgConstructor_isCovered() {
         Path tmp = Path.of(System.getProperty("java.io.tmpdir"));
         CacheShard[] shards = new CacheShard[0];
-        CacheVersion<String> v = new CacheVersion<>(tmp, shards, Map.of());
+        CacheVersion<String> v = new CacheVersion<>(tmp, shards, Map.of(), TestHelpers.simpleDefinition("vtemp", 0));
         assertNotNull(v);
         assertTrue(v.getCreatedAt() > 0);
     }
@@ -121,7 +121,6 @@ public class CacheCoverageExtraTests {
         CacheManager.Builder b = CacheManager.builder(tmp);
         b.shardCapacity(10).memoryCacheSize(10);
         CacheManager.initialize(b);
-
         CacheDefinition<String> def = CacheDefinition.<String>builder()
                 .name("notExpired")
                 .supplier(() -> Stream.of(new CacheRow("k", "v")))
@@ -131,7 +130,6 @@ public class CacheCoverageExtraTests {
                 .ttl(Duration.ofHours(1))
                 .build();
         CacheManager.register(def);
-
         // ensure activeVersion createdAt is now (not expired)
         Field instF = CacheManager.class.getDeclaredField("INSTANCE");
         instF.setAccessible(true);
@@ -146,7 +144,7 @@ public class CacheCoverageExtraTests {
         Path verDir = tmp.resolve("v");
         Files.createDirectories(verDir);
         CacheShard[] shards = new CacheShard[0];
-        CacheVersion<String> v = new CacheVersion<>(verDir, shards, Map.of(), 0);
+        CacheVersion<String> v = new CacheVersion<>(verDir, shards, Map.of(), TestHelpers.simpleDefinition("vtemp4", 0));
 
         Field activeF = slot.getClass().getDeclaredField("activeVersion");
         activeF.setAccessible(true);
@@ -168,10 +166,10 @@ public class CacheCoverageExtraTests {
         // completely different
         CacheLocation d = new CacheLocation(3, 4);
 
-        assertFalse(a.equals(b));
-        assertFalse(a.equals(c));
-        assertFalse(a.equals(d));
-        assertTrue(a.equals(new CacheLocation(1, 2)));
+        assertNotEquals(a, b);
+        assertNotEquals(a, c);
+        assertNotEquals(a, d);
+        assertEquals(a, new CacheLocation(1, 2));
     }
 
     @Test
@@ -204,7 +202,7 @@ public class CacheCoverageExtraTests {
 
         Path verDir = tmp.resolve("v");
         Files.createDirectories(verDir);
-        CacheVersion<String> v = new CacheVersion<>(verDir, new CacheShard[0], Map.of(), 0);
+        CacheVersion<String> v = new CacheVersion<>(verDir, new CacheShard[0], Map.of(), TestHelpers.simpleDefinition("vtemp5", 0));
 
         // set createdAt to past via reflection
         Field createdF = CacheVersion.class.getDeclaredField("createdAt");

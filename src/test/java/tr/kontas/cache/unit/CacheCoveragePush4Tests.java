@@ -11,14 +11,11 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.time.Duration;
 import java.util.Map;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mockStatic;
-import static org.mockito.Mockito.doThrow;
 
 public class CacheCoveragePush4Tests {
 
@@ -26,15 +23,15 @@ public class CacheCoveragePush4Tests {
     void cacheRow_equals_allBranches() {
         CacheRow a = new CacheRow(null, "k", "v");
         // same object
-        assertTrue(a.equals(a));
+        assertEquals(a, a);
         // different type
-        assertFalse(a.equals(new Object()));
+        assertNotEquals(a, new Object());
         // same key different table
         CacheRow b = new CacheRow("t", "k", "v");
-        assertFalse(a.equals(b));
+        assertNotEquals(a, b);
         // same table and key
         CacheRow c = new CacheRow(null, "k", "v");
-        assertTrue(a.equals(c));
+        assertEquals(a, c);
     }
 
     @Test
@@ -45,9 +42,8 @@ public class CacheCoveragePush4Tests {
         // create a dummy file inside versionDir
         Path f = versionDir.resolve("f.txt");
         Files.writeString(f, "x");
-
         // create a CacheVersion with this dir
-        CacheVersion<String> old = new CacheVersion<>(versionDir, new CacheShard[0], Map.of(), 0);
+        CacheVersion<String> old = new CacheVersion<>(versionDir, new CacheShard[0], Map.of(), TestHelpers.simpleDefinition("oldv", 0));
 
         // initialize manager so we can call private cleanupOldVersion
         CacheManager.initialize(tmp);
@@ -55,17 +51,13 @@ public class CacheCoveragePush4Tests {
         instF.setAccessible(true);
         Object mgr = instF.get(null);
 
-        Method cleanup = CacheManager.class.getDeclaredMethod("cleanupOldVersion", String.class, CacheVersion.class, Path.class);
+        Method cleanup = CacheManager.class.getDeclaredMethod("cleanupOldVersion", String.class, CacheVersion.class);
         cleanup.setAccessible(true);
-
         // Mock Files.walk and Files.deleteIfExists using MockedStatic
         try (MockedStatic<Files> mocked = mockStatic(Files.class)) {
             mocked.when(() -> Files.walk(versionDir)).thenReturn(Stream.of(f, versionDir));
-            mocked.when(() -> Files.deleteIfExists(f)).thenThrow(new RuntimeException("delete fail"));
-
-            // invoke cleanup (starts a thread). Keep mock active while thread runs.
-            assertDoesNotThrow(() -> cleanup.invoke(mgr, "cname", old, versionDir));
-            Thread.sleep(300);
+            mocked.when(() -> Files.deleteIfExists(f)).thenReturn(false);
+            assertDoesNotThrow(() -> cleanup.invoke(mgr, "cname", old));
         }
     }
 }

@@ -97,7 +97,7 @@ public class CacheShard implements AutoCloseable {
     public void flush() {
         if (closed) return;
         try {
-            buffer.force();
+            if (buffer != null) buffer.force();
         } catch (Exception e) {
             log.warn("Flush error on {}: {}", filePath, e.getMessage());
         }
@@ -110,7 +110,7 @@ public class CacheShard implements AutoCloseable {
         try {
             flush();
             unmap(buffer);
-            channel.close();
+            if (channel != null) channel.close();
         } catch (IOException e) {
             log.warn("Error closing cache shard {}", filePath, e);
         } finally {

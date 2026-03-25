@@ -9,10 +9,9 @@ import tr.kontas.cache.CacheVersion;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.mockStatic;
 
 public class CacheManagerExceptionBranchesTest {
 
@@ -37,23 +36,20 @@ public class CacheManagerExceptionBranchesTest {
         // create a dummy CacheVersion with a path that will cause Files.walk to throw
         Path path = Paths.get("some-path");
         CacheShard[] shards = new CacheShard[0];
-        CacheVersion<String> v = new CacheVersion<>(path, shards, java.util.Map.of(), 0);
-
-        try (MockedStatic<Files> mocked = mockStatic(Files.class)) {
+        CacheVersion<String> v = new CacheVersion<>(path, shards, java.util.Map.of(), TestHelpers.simpleDefinition("exc", 0));
+        try (var mocked = mockStatic(Files.class)) {
             // Files.walk will throw when called on v.getVersionDir()
             mocked.when(() -> Files.walk(v.getVersionDir())).thenThrow(new RuntimeException("walk-fail"));
-
             // create a dummy CacheManager instance via builder initialize
             Path tmp = Files.createTempDirectory("cmex");
             CacheManager.initialize(tmp);
             var instF = CacheManager.class.getDeclaredField("INSTANCE");
             instF.setAccessible(true);
             Object mgr = instF.get(null);
-            var cleanup = CacheManager.class.getDeclaredMethod("cleanupOldVersion", String.class, CacheVersion.class, Path.class);
+            var cleanup = CacheManager.class.getDeclaredMethod("cleanupOldVersion", String.class, CacheVersion.class);
             cleanup.setAccessible(true);
-
             // should not throw even if Files.walk throws inside
-            assertDoesNotThrow(() -> cleanup.invoke(mgr, "cname", v, v.getVersionDir()));
+            assertDoesNotThrow(() -> cleanup.invoke(mgr, "exc", v));
         }
     }
 }

@@ -71,7 +71,7 @@ public class CacheFilesStaticMockTests {
         Path versionDir = Paths.get("/somev");
         Path base = Paths.get("/base3");
         CacheShard[] shards = new CacheShard[0];
-        CacheVersion<String> v = new CacheVersion<>(versionDir, shards, java.util.Map.of(), 0);
+        CacheVersion<String> v = new CacheVersion<>(versionDir, shards, java.util.Map.of(), TestHelpers.simpleDefinition("vfs", 0));
 
         // initialize manager so cleanupOldVersion can be invoked on instance
         CacheManager.initialize(base);
@@ -79,18 +79,15 @@ public class CacheFilesStaticMockTests {
         instF.setAccessible(true);
         Object mgr = instF.get(null);
 
-        Method cleanup = CacheManager.class.getDeclaredMethod("cleanupOldVersion", String.class, CacheVersion.class, Path.class);
+        Method cleanup = CacheManager.class.getDeclaredMethod("cleanupOldVersion", String.class, CacheVersion.class);
         cleanup.setAccessible(true);
-
         try (MockedStatic<Files> mocked = mockStatic(Files.class)) {
             // make walk throw when thread runs
             mocked.when(() -> Files.walk(versionDir)).thenThrow(new RuntimeException("walk-thread-fail"));
             // Also ensure deleteIfExists throws to hit inner catch if reached
             mocked.when(() -> Files.deleteIfExists(versionDir)).thenThrow(new RuntimeException("delete-fail"));
-
             // invoke cleanup (starts a thread). Keep mock active while thread runs.
-            assertDoesNotThrow(() -> cleanup.invoke(mgr, "cname", v, versionDir));
-
+            assertDoesNotThrow(() -> cleanup.invoke(mgr, "cname", v));
             // wait briefly to allow background thread to run while mock is active
             Thread.sleep(300);
         }

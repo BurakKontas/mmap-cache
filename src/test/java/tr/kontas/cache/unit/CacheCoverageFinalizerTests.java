@@ -35,15 +35,13 @@ public class CacheCoverageFinalizerTests {
                 .keyExtractor(CacheRow::getKey)
                 .serializer(CacheDefinition.defaultSerializer())
                 .deserializer(CacheDefinition.defaultDeserializer(s -> s))
-                .ttl(Duration.ofMillis(1))
+                .ttl(Duration.ofSeconds(60))
                 .build();
         CacheManager.register(def);
 
-        // set activeVersion createdAt into the past so ttl is considered expired
         Field instF = CacheManager.class.getDeclaredField("INSTANCE");
         instF.setAccessible(true);
         Object mgr = instF.get(null);
-
         Field slotsF = CacheManager.class.getDeclaredField("slots");
         slotsF.setAccessible(true);
         @SuppressWarnings("unchecked")
@@ -53,7 +51,7 @@ public class CacheCoverageFinalizerTests {
         // create a CacheVersion with createdAt far in the past and assign
         Path verDir = tmp.resolve("v");
         Files.createDirectories(verDir);
-        CacheVersion<String> v = new CacheVersion<>(verDir, new CacheShard[0], Map.of(), 0);
+        CacheVersion<String> v = new CacheVersion<>(verDir, new CacheShard[0], Map.of(), TestHelpers.simpleDefinition("vtemp", 0));
 
         // set createdAt to past via reflection
         Field createdF = CacheVersion.class.getDeclaredField("createdAt");
@@ -77,7 +75,7 @@ public class CacheCoverageFinalizerTests {
         Files.createDirectories(versionDir);
         Files.write(versionDir.resolve("f"), "x".getBytes());
 
-        CacheVersion<String> v = new CacheVersion<>(versionDir, new CacheShard[0], Map.of(), 0);
+        CacheVersion<String> v = new CacheVersion<>(versionDir, new CacheShard[0], Map.of(), TestHelpers.simpleDefinition("vtemp2", 0));
         v.acquireReader();
 
         CacheManager.initialize(tmp);
@@ -85,11 +83,11 @@ public class CacheCoverageFinalizerTests {
         instF.setAccessible(true);
         Object mgr = instF.get(null);
 
-        Method cleanup = CacheManager.class.getDeclaredMethod("cleanupOldVersion", String.class, CacheVersion.class, Path.class);
+        Method cleanup = CacheManager.class.getDeclaredMethod("cleanupOldVersion", String.class, CacheVersion.class);
         cleanup.setAccessible(true);
 
         // call cleanup; it will start a thread and wait because v has active readers
-        cleanup.invoke(mgr, "cname", v, versionDir);
+        cleanup.invoke(mgr, "cname", v);
 
         // after a short delay release reader so cleanup can proceed
         Thread.sleep(200);
@@ -107,10 +105,10 @@ public class CacheCoverageFinalizerTests {
     @Test
     void cacheLocation_equalsBranches() {
         CacheLocation a = new CacheLocation(1, 2);
-        assertTrue(a.equals(a)); // same object
-        assertFalse(a.equals(null)); // null
-        assertFalse(a.equals(new Object())); // different type
-        assertTrue(a.equals(new CacheLocation(1, 2))); // same values
+        assertEquals(a, a); // same object
+        assertNotEquals(null, a); // null
+        assertNotEquals(a, new Object()); // different type
+        assertEquals(a, new CacheLocation(1, 2)); // same values
     }
 
     @Test
@@ -182,11 +180,11 @@ public class CacheCoverageFinalizerTests {
         instF.setAccessible(true);
         Object mgr = instF.get(null);
 
-        Method cleanup = CacheManager.class.getDeclaredMethod("cleanupOldVersion", String.class, CacheVersion.class, Path.class);
+        Method cleanup = CacheManager.class.getDeclaredMethod("cleanupOldVersion", String.class, CacheVersion.class);
         cleanup.setAccessible(true);
 
         // should return without exception
-        assertDoesNotThrow(() -> cleanup.invoke(mgr, "cname", null, tmp));
+        assertDoesNotThrow(() -> cleanup.invoke(mgr, "cname", null));
     }
 
     @Test
@@ -196,16 +194,16 @@ public class CacheCoverageFinalizerTests {
         Files.createDirectories(versionDir);
         Files.write(versionDir.resolve("f2"), "x".getBytes());
 
-        CacheVersion<String> v = new CacheVersion<>(versionDir, new CacheShard[0], Map.of(), 0);
+        CacheVersion<String> v = new CacheVersion<>(versionDir, new CacheShard[0], Map.of(), TestHelpers.simpleDefinition("vtemp3", 0));
 
         CacheManager.initialize(tmp);
         Field instF = CacheManager.class.getDeclaredField("INSTANCE");
         instF.setAccessible(true);
         Object mgr = instF.get(null);
 
-        Method cleanup = CacheManager.class.getDeclaredMethod("cleanupOldVersion", String.class, CacheVersion.class, Path.class);
+        Method cleanup = CacheManager.class.getDeclaredMethod("cleanupOldVersion", String.class, CacheVersion.class);
         cleanup.setAccessible(true);
-        cleanup.invoke(mgr, "cname", v, versionDir);
+        cleanup.invoke(mgr, "cname", v);
 
         // wait briefly for cleanup thread
         long start = System.currentTimeMillis();

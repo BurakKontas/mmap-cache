@@ -1,8 +1,29 @@
 package tr.kontas.cache;
 
-public final class CacheLocation {
-    private final int shardId;
-    private final int offset;
+import net.openhft.chronicle.bytes.BytesIn;
+import net.openhft.chronicle.bytes.BytesMarshallable;
+import net.openhft.chronicle.bytes.BytesOut;
+
+/**
+ * Shard index'inde bir kaydın fiziksel konumunu tutar.
+ * <p>
+ * Chronicle Map entegrasyonu için {@link BytesMarshallable} implement edilmiştir.
+ * Chronicle bu interface aracılığıyla nesneyi off-heap'e serileştirir;
+ * JVM heap'inde hiçbir alan kaplamaz.
+ * <p>
+ * Serileştirilmiş boyut: int(4) + int(4) = 8 byte / kayıt
+ */
+public final class CacheLocation implements BytesMarshallable {
+
+    private int shardId;
+    private int offset;
+
+    /**
+     * Chronicle Map'in kendi içinde nesne oluşturabilmesi için
+     * no-arg constructor zorunludur.
+     */
+    public CacheLocation() {
+    }
 
     public CacheLocation(int shardId, int offset) {
         this.shardId = shardId;
@@ -16,6 +37,22 @@ public final class CacheLocation {
     public int offset() {
         return offset;
     }
+
+    // ── BytesMarshallable ───────────────────────────────────────────────────
+
+    @Override
+    public void writeMarshallable(BytesOut<?> bytes) {
+        bytes.writeInt(shardId);
+        bytes.writeInt(offset);
+    }
+
+    @Override
+    public void readMarshallable(BytesIn<?> bytes) {
+        shardId = bytes.readInt();
+        offset = bytes.readInt();
+    }
+
+    // ── Object ──────────────────────────────────────────────────────────────
 
     @Override
     public boolean equals(Object o) {

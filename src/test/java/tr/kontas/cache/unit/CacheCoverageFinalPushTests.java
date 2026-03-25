@@ -56,8 +56,9 @@ public class CacheCoverageFinalPushTests {
     @Test
     void cacheVersion_getters_covered() throws Exception {
         Path tmp = Files.createTempDirectory("cache_final_push");
-        CacheVersion<String> v = new CacheVersion<>(tmp, new CacheShard[0], Map.of(), 5);
-        assertEquals(5, v.getMemoryCacheSize());
+        CacheVersion<String> v = new CacheVersion<>(tmp, new CacheShard[0], Map.of(), TestHelpers.simpleDefinition("cv", 5));
+        // memoryCacheMaxSize was set to 5 → memoryCache should be present (non-null)
+        assertNotNull(v.getMemoryCache());
         assertNotNull(v.getReaderCount());
         assertNotNull(v.getVersionDir());
     }
