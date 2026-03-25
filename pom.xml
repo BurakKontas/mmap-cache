@@ -5,11 +5,11 @@
 
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>tr.kontas</groupId>
+    <groupId>tr.kontas.cache</groupId>
     <artifactId>mmap-cache</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
 
-    <name>FluentValidation</name>
+    <name>Memory Mapped Cache</name>
 
     <description>
         A compact, production-ready Java caching library designed to store and serve very large key-value datasets with minimal heap pressure.
