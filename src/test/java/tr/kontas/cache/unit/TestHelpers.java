@@ -8,6 +8,11 @@ import java.util.stream.Stream;
 
 @SuppressWarnings("unchecked")
 public final class TestHelpers {
+    static {
+        // Ensure Byte Buddy experimental features are enabled during tests (Java 25+ compatibility)
+        // This helps Mockito's inline mocking to work when running tests from IDE.
+        System.setProperty("net.bytebuddy.experimental", "true");
+    }
 
     private TestHelpers() {
     }

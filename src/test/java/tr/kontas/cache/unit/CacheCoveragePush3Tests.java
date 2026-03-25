@@ -8,7 +8,6 @@ import tr.kontas.cache.CacheShard;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
-import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -29,16 +28,14 @@ public class CacheCoveragePush3Tests {
         FileChannel mockChannel = Mockito.mock(FileChannel.class);
         doThrow(new IOException("mock close fail")).when(mockChannel).close();
 
-        // mock buffer to avoid null issues
-        MappedByteBuffer mockBuf = Mockito.mock(MappedByteBuffer.class);
-
         Field channelF = CacheShard.class.getDeclaredField("channel");
         channelF.setAccessible(true);
         channelF.set(shard, mockChannel);
 
         Field bufF = CacheShard.class.getDeclaredField("buffer");
         bufF.setAccessible(true);
-        bufF.set(shard, mockBuf);
+        // Do not mock MappedByteBuffer on Java 21; leave buffer null to exercise close path safely
+        bufF.set(shard, null);
 
         // should swallow the IOException and not throw
         assertDoesNotThrow(shard::close);
