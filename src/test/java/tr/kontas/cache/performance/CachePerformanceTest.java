@@ -4,11 +4,13 @@ import tr.kontas.cache.CacheDefinition;
 import tr.kontas.cache.CacheManager;
 import tr.kontas.cache.CacheRow;
 
-import java.io.File;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Random;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
@@ -18,31 +20,51 @@ import java.util.stream.Stream;
 
 public class CachePerformanceTest {
 
-    private static final int[] SIZES = {
+    // default sizes; can be overridden by passing comma-separated sizes as program argument
+    private static final int[] DEFAULT_SIZES = {
             1_000,
             10_000,
             100_000,
             1_000_000,
             10_000_000,
-//            100_000_000
+            //100_000_000
     };
 
     public static void main(String[] args) throws Exception {
         System.out.println("=============== CACHE PERFORMANCE TEST ===============");
 
-        for (int size : SIZES) {
+        int[] sizes = DEFAULT_SIZES;
+        if (args != null && args.length > 0 && args[0] != null && !args[0].isBlank()) {
+            try {
+                String[] parts = args[0].split(",");
+                List<Integer> parsed = new ArrayList<>();
+                for (String p : parts) {
+                    parsed.add(Integer.parseInt(p.trim()));
+                }
+                sizes = parsed.stream().mapToInt(Integer::intValue).toArray();
+            } catch (Exception e) {
+                System.err.println("Failed to parse sizes from args, falling back to defaults: " + e.getMessage());
+                sizes = DEFAULT_SIZES;
+            }
+        }
+
+        for (int size : sizes) {
             runTestForSize(size);
             System.out.println("------------------------------------------------------");
         }
 
+        // best-effort shutdown of manager executors and threads
         shutdownCacheManagerExecutors();
+
+        System.out.println("All performance runs completed.");
     }
 
     private static void runTestForSize(int numRecords) throws Exception {
         System.out.printf("Test başlıyor: %,d kayıt...%n", numRecords);
 
+        // mild GC + pause to stabilize
         System.gc();
-        Thread.sleep(500);
+        Thread.sleep(300);
 
         long memBefore = getUsedMemory();
 
@@ -76,14 +98,14 @@ public class CachePerformanceTest {
 
         System.out.printf("Yazma ve İndeksleme (%d kayıt): %,d ms%n", numRecords, (endWrite - startWrite));
 
-        // Disk size
-        long diskBytes = getFolderSize(tempDir.toFile());
+        // Disk size (walk the tempDir to sum file sizes)
+        long diskBytes = getFolderSize(tempDir);
         System.out.printf("Diskte Kapladığı Alan: %,d MB (%,d Byte)%n",
                 diskBytes / (1024 * 1024), diskBytes);
 
         // Memory usage
         System.gc();
-        Thread.sleep(500);
+        Thread.sleep(300);
 
         long memAfter = getUsedMemory();
         long memUsed = memAfter - memBefore;
@@ -96,7 +118,7 @@ public class CachePerformanceTest {
         Random random = new Random(42);
 
         // Warmup
-        for (int i = 0; i < 1000; i++) {
+        for (int i = 0; i < 1000 && i < readCount; i++) {
             CacheManager.get(cacheName, "key-" + random.nextInt(numRecords));
         }
 
@@ -127,7 +149,12 @@ public class CachePerformanceTest {
         System.out.printf(" - Min:      %,.2f µs%n", minUs);
         System.out.printf(" - Max:      %,.2f ms%n", maxMs);
 
-        deleteDir(tempDir.toFile());
+        // delete dir (best-effort)
+        try {
+            deleteDirRecursive(tempDir);
+        } catch (Throwable t) {
+            System.err.println("Failed to delete temp dir " + tempDir + ": " + t.getMessage());
+        }
     }
 
     /**
@@ -135,11 +162,7 @@ public class CachePerformanceTest {
      */
     private static Stream<CacheRow> generateData(int count) {
         return IntStream.range(0, count).mapToObj(i ->
-                new CacheRow(
-                        "perfCache",
-                        "key-" + i,
-                        "value-for-record-" + i
-                )
+                new CacheRow("perfCache", "key-" + i, "value-for-record-" + i)
         );
     }
 
@@ -148,32 +171,33 @@ public class CachePerformanceTest {
         return runtime.totalMemory() - runtime.freeMemory();
     }
 
-    private static long getFolderSize(File dir) {
-        long size = 0;
-        File[] files = dir.listFiles();
-
-        if (files != null) {
-            for (File file : files) {
-                if (file.isFile()) {
-                    size += file.length();
-                } else {
-                    size += getFolderSize(file);
-                }
-            }
+    private static long getFolderSize(Path dir) {
+        try (Stream<Path> stream = Files.walk(dir)) {
+            return stream.filter(Files::isRegularFile)
+                    .mapToLong(p -> {
+                        try {
+                            return Files.size(p);
+                        } catch (Exception e) {
+                            return 0L;
+                        }
+                    }).sum();
+        } catch (Exception e) {
+            return 0L;
         }
-        return size;
     }
 
-    private static void deleteDir(File dir) {
-        File[] files = dir.listFiles();
-
-        if (files != null) {
-            for (File file : files) {
-                if (file.isDirectory()) deleteDir(file);
-                else file.delete();
-            }
+    private static void deleteDirRecursive(Path dir) throws Exception {
+        if (!Files.exists(dir)) return;
+        // delete files and directories in reverse order
+        try (Stream<Path> stream = Files.walk(dir)) {
+            stream.sorted(Comparator.reverseOrder())
+                    .forEach(p -> {
+                        try {
+                            Files.deleteIfExists(p);
+                        } catch (Exception ignored) {
+                        }
+                    });
         }
-        dir.delete();
     }
 
     private static void shutdownCacheManagerExecutors() {
@@ -185,9 +209,10 @@ public class CachePerformanceTest {
             if (sched instanceof ScheduledExecutorService) {
                 ScheduledExecutorService ses = (ScheduledExecutorService) sched;
                 ses.shutdownNow();
-                ses.awaitTermination(10, TimeUnit.SECONDS);
+                ses.awaitTermination(5, TimeUnit.SECONDS);
             }
-        } catch (Throwable ignored) {}
+        } catch (Throwable ignored) {
+        }
 
         try {
             Field f2 = CacheManager.class.getDeclaredField("RELOAD_EXECUTOR");
@@ -197,10 +222,12 @@ public class CachePerformanceTest {
             if (exec instanceof ExecutorService) {
                 ExecutorService es = (ExecutorService) exec;
                 es.shutdownNow();
-                es.awaitTermination(10, TimeUnit.SECONDS);
+                es.awaitTermination(5, TimeUnit.SECONDS);
             }
-        } catch (Throwable ignored) {}
+        } catch (Throwable ignored) {
+        }
 
+        // interrupt lingering cache-* threads
         for (Thread t : Thread.getAllStackTraces().keySet()) {
             if (t == null) continue;
 
@@ -210,13 +237,14 @@ public class CachePerformanceTest {
                 try {
                     if (t.isAlive()) {
                         t.interrupt();
-                        t.join(10_000);
+                        t.join(2_000);
 
                         if (t.isAlive()) {
                             System.err.println("Warning: cache thread still alive: " + name);
                         }
                     }
-                } catch (Throwable ignored) {}
+                } catch (Throwable ignored) {
+                }
             }
         }
     }

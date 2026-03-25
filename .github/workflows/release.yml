@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
+      fail-fast: false
       matrix:
         java: [ 11, 17, 21, 25 ]
 
@@ -20,44 +21,45 @@ jobs:
       - name: Set up JDK ${{ matrix.java }}
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: ${{ matrix.java }}
-          cache: 'maven'
+          cache: maven
 
       - name: Build & Test
         run: mvn -B clean verify
+
+      - name: Set up JDK 11 for deploy
+        if: matrix.java == 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 11
 
       - name: Import GPG key
         if: matrix.java == 11
         run: |
           echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
-          gpg --list-secret-keys --keyid-format LONG
 
-      - name: Configure GPG for non-interactive use
+      - name: Configure GPG
         if: matrix.java == 11
         run: |
           mkdir -p ~/.gnupg
+          chmod 700 ~/.gnupg
           echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
           echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
-          chmod 700 ~/.gnupg
           gpgconf --kill gpg-agent || true
 
-      - name: Configure Maven settings.xml
+      - name: Set up Maven Central auth
         if: matrix.java == 11
-        run: |
-          mkdir -p ~/.m2
-          cat > ~/.m2/settings.xml <<EOF
-          <settings>
-            <servers>
-              <server>
-                <id>central</id>
-                <username>${{ secrets.MAVEN_USERNAME }}</username>
-                <password>${{ secrets.MAVEN_PASSWORD }}</password>
-              </server>
-            </servers>
-          </settings>
-          EOF
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 11
+          server-id: central
+          server-username: MAVEN_USERNAME
+          server-password: MAVEN_PASSWORD
 
+      # 🚀 Deploy
       - name: Deploy to Maven Central
         if: matrix.java == 11
         run: |
