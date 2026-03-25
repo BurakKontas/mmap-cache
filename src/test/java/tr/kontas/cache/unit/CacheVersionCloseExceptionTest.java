@@ -25,7 +25,7 @@ public class CacheVersionCloseExceptionTest {
         Map<String, CacheLocation> index = Mockito.mock(Map.class, withSettings().extraInterfaces(Closeable.class));
 
         Closeable closeable = (Closeable) index;
-        doThrow(new RuntimeException("simulated close failure")).when(closeable).close();
+        Mockito.doThrow(new RuntimeException("simulated close failure")).when(closeable).close();
 
         CacheVersion<String> version = new CacheVersion<>(tmp, new CacheShard[0], index, TestHelpers.simpleDefinition("cvclose", 0));
 
