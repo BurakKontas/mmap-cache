@@ -37,13 +37,17 @@ import java.nio.file.Path;
 
 Path base = Path.of("/var/lib/mycache");
 CacheManager.Builder builder = CacheManager.builder(base)
-    .shardCapacity(100_000)         // how many records per shard file (shard file capacity)
+    .shardCapacity(100_000)         // how many records per data shard file
     .memoryCacheSize(10_000)        // manager-wide default for CacheDefinition.memoryCacheMaxSize (0 = disabled)
     .defaultMaxKeyBytes(64)
     .defaultMaxValueBytes(512)
-    .chronicleAverageKey("key-00000000"); // average key template used when building a ChronicleMap index
+    .chronicleAverageKey("key-00000000") // average key template used when building a ChronicleMap index
+    .indexShardCount(16);           // splits the ChronicleMap index into N shards to bypass OS mmap limits (e.g. 4GB limit on Windows)
 
 CacheManager.initialize(builder);
+
+// Retrieve from cache
+String value = CacheManager.get("myCache", "some-key");
 ```
 
 ### `CacheDefinition` with Caffeine options
@@ -94,6 +98,16 @@ totalDiskBytes ≈ shardFileSize * shardCount
 
 Example: `maxKeyBytes=32`, `maxValueBytes=128` → recordSize = 180 bytes. With 1,000,000 rows and
 `shardCapacity=100_000` → 10 shards × 100k × 180 ≈ 172 MB.
+
+---
+
+## ChronicleMap Index Sharding (Windows compatibility)
+
+To support Windows environments where a single memory-mapped file cannot exceed 4GB (~4096 MiB), the `ChronicleMap` index is horizontally partitioned into multiple files (e.g., `index_0000.chm`, `index_0001.chm`).
+Keys are deterministically routed to a specific shard using their hash code (`(key.hashCode() & 0x7fffffff) % indexShardCount`).
+
+- Set `indexShardCount` on the `CacheManager.Builder` based on your total row count to keep individual index shards under the 4GB limit.
+- Default `indexShardCount` is 16.
 
 ---
 

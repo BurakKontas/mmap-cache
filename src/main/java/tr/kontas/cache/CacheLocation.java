@@ -5,13 +5,13 @@ import net.openhft.chronicle.bytes.BytesMarshallable;
 import net.openhft.chronicle.bytes.BytesOut;
 
 /**
- * Shard index'inde bir kaydın fiziksel konumunu tutar.
+ * Stores the physical location of a cached record in shard storage.
  * <p>
- * Chronicle Map entegrasyonu için {@link BytesMarshallable} implement edilmiştir.
- * Chronicle bu interface aracılığıyla nesneyi off-heap'e serileştirir;
- * JVM heap'inde hiçbir alan kaplamaz.
+ * Implements {@link BytesMarshallable} for Chronicle Map integration.
+ * Chronicle serializes this object off-heap through this contract,
+ * minimizing on-heap footprint.
  * <p>
- * Serileştirilmiş boyut: int(4) + int(4) = 8 byte / kayıt
+ * Serialized size: int(4) + int(4) = 8 bytes per record.
  */
 public final class CacheLocation implements BytesMarshallable {
 
@@ -19,8 +19,7 @@ public final class CacheLocation implements BytesMarshallable {
     private int offset;
 
     /**
-     * Chronicle Map'in kendi içinde nesne oluşturabilmesi için
-     * no-arg constructor zorunludur.
+     * Required no-arg constructor for Chronicle Map internal object creation.
      */
     public CacheLocation() {
     }

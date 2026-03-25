@@ -6,29 +6,43 @@ import lombok.Getter;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.function.Function;
-import java.util.function.Supplier;
-import java.util.stream.Stream;
 
+/**
+ * Declarative configuration for one cache namespace.
+ * <p>
+ * A definition contains data source, key/value mapping functions,
+ * sizing preferences, and optional in-memory cache policies.
+ *
+ * @param <V> deserialized value type returned by the cache
+ */
 @Getter
 @Builder(toBuilder = true)
 public final class CacheDefinition<V> {
     public static final int DEFAULT_MAX_KEY_BYTES = 256;
     public static final int DEFAULT_MAX_VALUE_BYTES = 1024;
 
-    // ── Temel tanım ──────────────────────────────────────────────────────────
+    // ── Basic Definition ───────────────────────────────────────────────────
     private final String name;
-    private final Supplier<Stream<CacheRow>> supplier;
+
+    /**
+     * Supplier providing the data stream.
+     * <p>
+     * If the row count is known beforehand, use {@link SizedSupplier#of(java.util.function.Supplier, long)};
+     * in this case, CacheManager skips the counting pass, reducing load time by ~50%.
+     * If unknown, {@code SizedSupplier.unknown(...)} or a standard lambda can be passed.
+     */
+    private final SizedSupplier supplier;
     private final Function<CacheRow, String> keyExtractor;
     private final Function<CacheRow, byte[]> serializer;
     private final Function<byte[], V> deserializer;
 
     /**
-     * Tüm cache versiyonunun yenileneceği süre (supplier yeniden çağrılır).
-     * Null veya Duration.ZERO ise otomatik yenileme yapılmaz.
+     * The time to live duration for the entire cache version (when the supplier is called again to refresh).
+     * If null or Duration.ZERO, no auto-refresh is triggered.
      */
     private final Duration ttl;
 
-    // ── Shard / kayıt boyutu ─────────────────────────────────────────────────
+    // ── Shard / Record Sizing ──────────────────────────────────────────────
     @Builder.Default
     private final boolean dynamicSizing = false;
 
@@ -38,34 +52,32 @@ public final class CacheDefinition<V> {
     @Builder.Default
     private final int maxValueBytes = DEFAULT_MAX_VALUE_BYTES;
 
-    // ── Caffeine in-memory katmanı ───────────────────────────────────────────
+    // ── Caffeine In-Memory Layer ───────────────────────────────────────────
 
     /**
-     * Caffeine cache'inin maksimum eleman sayısı.
-     * 0 verilirse in-memory katman devre dışı kalır; her okuma doğrudan
-     * mmap shard'a gider.
+     * Maximum number of elements in the Caffeine cache layer.
+     * If 0, the in-memory layer is disabled; every read goes directly to the mmap shards.
      */
     @Builder.Default
     private final int memoryCacheMaxSize = 0;
 
     /**
-     * Caffeine write-after TTL: bir eleman bu süre sonra cache'den düşer
-     * ve bir sonraki okumada shard'dan yeniden yüklenir.
-     * Null verilirse entry'ler yalnızca {@code memoryCacheMaxSize} dolunca
-     * LRU politikasıyla çıkarılır; zamanlı çıkarma olmaz.
+     * Caffeine write-after TTL: an element is removed after this duration
+     * and reloaded from the shard on the next read.
+     * If null, entries are evicted via LRU only when {@code memoryCacheMaxSize} is reached.
      */
     @Builder.Default
     private final Duration memoryCacheTtl = null;
 
     /**
-     * Caffeine expire-after-access: son erişimden bu kadar süre sonra
-     * entry cache'den düşer. Null verilirse aktif değildir.
-     * {@code memoryCacheTtl} ile birlikte kullanılabilir.
+     * Caffeine expire-after-access: an element is removed after this much idle time.
+     * If null, it is inactive.
+     * Can be combined with {@code memoryCacheTtl}.
      */
     @Builder.Default
     private final Duration memoryCacheIdleTtl = null;
 
-    // ── Yardımcılar ──────────────────────────────────────────────────────────
+    // ── Helpers ────────────────────────────────────────────────────────────
     public static Function<CacheRow, byte[]> defaultSerializer() {
         return row -> {
             String s = row.getValueAsString();

@@ -16,12 +16,20 @@ public final class CacheVersion<V> {
 
     private final Path versionDir;
     private final CacheShard[] shards;
-    private final Map<String, CacheLocation> index;
+    private final Map<String, CacheLocation>[] indexShards;
     private final long createdAt;
 
     /**
-     * Caffeine in-memory katmanı.
-     * memoryCacheMaxSize == 0 ise null'dır; okuma doğrudan shard'a gider.
+     * @deprecated Use {@link #getIndexShards()} for sharded access.
+     */
+    @Deprecated
+    public Map<String, CacheLocation> getIndex() {
+        return indexShards != null && indexShards.length > 0 ? indexShards[0] : null;
+    }
+
+    /**
+     * Caffeine in-memory layer.
+     * Null if memoryCacheMaxSize == 0; reads go directly to the shard.
      */
     private final Cache<String, V> memoryCache;
 
@@ -30,14 +38,27 @@ public final class CacheVersion<V> {
     public CacheVersion(
             Path versionDir,
             CacheShard[] shards,
-            Map<String, CacheLocation> index,
+            Map<String, CacheLocation>[] indexShards,
             CacheDefinition<V> definition
     ) {
         this.versionDir = versionDir;
         this.shards = shards;
-        this.index = index;
+        this.indexShards = indexShards;
         this.createdAt = System.currentTimeMillis();
         this.memoryCache = buildCache(definition);
+    }
+
+    /**
+     * Backward-compatibility/Test constructor.
+     */
+    @SuppressWarnings("unchecked")
+    public CacheVersion(
+            Path versionDir,
+            CacheShard[] shards,
+            Map<String, CacheLocation> index,
+            CacheDefinition<V> definition
+    ) {
+        this(versionDir, shards, index == null ? new Map[0] : new Map[]{index}, definition);
     }
 
     // ── Caffeine cache builder ───────────────────────────────────────────────
@@ -63,7 +84,7 @@ public final class CacheVersion<V> {
         return builder.build();
     }
 
-    // ── Cache erişim yardımcıları ────────────────────────────────────────────
+    // ── Cache access helpers  ────────────────────────────────────────────────
 
     public V getFromMemory(String key) {
         if (memoryCache == null) return null;
@@ -75,7 +96,7 @@ public final class CacheVersion<V> {
         memoryCache.put(key, value);
     }
 
-    // ── Reader sayacı ────────────────────────────────────────────────────────
+    // ── Reader counter ───────────────────────────────────────────────────────
 
     public void acquireReader() {
         readerCount.incrementAndGet();
@@ -89,19 +110,19 @@ public final class CacheVersion<V> {
         return readerCount.get() > 0;
     }
 
-    // ── Kapatma ─────────────────────────────────────────────────────────────
+    // ── Shutdown ─────────────────────────────────────────────────────────────
 
     /**
-     * Shardları ve Chronicle Map index'ini kapatır.
-     * Caffeine cache GC tarafından temizlenir; explicit invalidation yeterlidir.
+     * Closes the shards and the Chronicle Map index.
+     * Caffeine cache is cleaned by the GC; explicit invalidation is sufficient.
      */
     public void close() {
-        // 1. Caffeine'i geçersiz kıl
+        // 1. Invalidate Caffeine cache
         if (memoryCache != null) {
             memoryCache.invalidateAll();
         }
 
-        // 2. Shard dosyalarını kapat
+        // 2. Close shard files
         for (CacheShard shard : shards) {
             try {
                 shard.close();
@@ -110,14 +131,19 @@ public final class CacheVersion<V> {
             }
         }
 
-        // 3. Off-heap Chronicle Map'i kapat (varsa)
-        if (index instanceof Closeable) {
-            try {
-                ((Closeable) index).close();
-                log.debug("Chronicle Map index closed for version '{}'", versionDir.getFileName());
-            } catch (Exception e) {
-                log.warn("Failed to close Chronicle Map index for version '{}'",
-                        versionDir.getFileName(), e);
+        // 3. Close off-heap Chronicle Map index (if any)
+        if (indexShards != null) {
+            for (int i = 0; i < indexShards.length; i++) {
+                Map<String, CacheLocation> index = indexShards[i];
+                if (index instanceof Closeable) {
+                    try {
+                        ((Closeable) index).close();
+                        log.debug("Chronicle Map index {} closed for version '{}'", i, versionDir.getFileName());
+                    } catch (Exception e) {
+                        log.warn("Failed to close Chronicle Map index {} for version '{}'",
+                                i, versionDir.getFileName(), e);
+                    }
+                }
             }
         }
     }

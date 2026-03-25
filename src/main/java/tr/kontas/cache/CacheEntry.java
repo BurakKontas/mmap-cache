@@ -22,6 +22,21 @@ public final class CacheEntry {
         this.maxValueBytes = maxValueBytes;
     }
 
+    /**
+     * Resets this reusable object with new row data.
+     * <p>
+     * CacheManager reuses a single {@code CacheEntry} instance in the write loop
+     * instead of allocating {@code new CacheEntry(...)} per row.
+     * This is safe because {@link CacheShard#write(int, CacheEntry)} serializes
+     * the entry immediately into the ByteBuffer.
+     */
+    public void reset(long id, long timestamp, String key, byte[] valueBytes) {
+        this.id         = id;
+        this.timestamp  = timestamp;
+        this.key        = key;
+        this.valueBytes = valueBytes;
+    }
+
     public CacheEntry(long id, long timestamp, String key, byte[] valueBytes,
                       int maxKeyBytes, int maxValueBytes) {
         this.id = id;
