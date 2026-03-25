@@ -8,6 +8,36 @@
     <artifactId>cache</artifactId>
     <version>1.0.0</version>
 
+    <name>FluentValidation</name>
+    <description>
+        A compact, production-ready Java caching library designed to store and serve very large key-value datasets with minimal heap pressure. Data is written as fixed-size binary records to memory-mapped shard files (mmap) while an optional in-heap Caffeine layer serves hot keys. An off-heap ChronicleMap index can be used for very large key sets.
+    </description>
+    <url>https://github.com/BurakKontas/mmap-cache</url>
+
+    <licenses>
+        <license>
+            <name>GPL-3.0 license</name>
+            <url>https://www.gnu.org/licenses/gpl-3.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <name>Arda Burak Kontaş</name>
+            <email>aburakkontas@hotmail.com</email>
+            <organization>BurakKontas</organization>
+            <organizationUrl>https://github.com/BurakKontas</organizationUrl>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git:git://github.com/BurakKontas/mmap-cache.git</connection>
+        <developerConnection>scm:git:ssh://github.com/BurakKontas/mmap-cache.git</developerConnection>
+        <url>https://github.com/BurakKontas/mmap-cache</url>
+        <tag>HEAD</tag>
+    </scm>
+
     <properties>
         <maven.compiler.release>11</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
