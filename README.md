@@ -145,29 +145,6 @@ Notes that affect results:
 
 ---
 
-## CI Release (GitHub Actions)
-
-This project includes a `release.yml` workflow that runs a Java matrix and deploys to Maven Central on tagged releases.
-Important points in the workflow:
-
-- It tests across multiple JDKs (example matrix includes 11, 17, 21, 25).
-- GPG import, Maven settings, and the actual `mvn deploy` step are gated to the Java 11 job to keep signing consistent.
-- Ensure repository secrets are configured: `MAVEN_USERNAME`, `MAVEN_PASSWORD`, `GPG_PRIVATE_KEY`, `GPG_PASSPHRASE`.
-
-If you want releases to run with a different JDK distribution (eg. Corretto instead of Temurin) edit
-`.github/workflows/release.yml` `uses: actions/setup-java@v4` distribution or use a custom runner with the desired JDK
-installed.
-
----
-
 ## License
 
 This repository is licensed under GNU GPL v3.0 (see `LICENSE`).
-
----
-
-If you'd like I can also:
-
-- add a quick `docs/performance.md` with exact commands used to measure and parse results,
-- add a small `perf-runner` class that writes CSV results (time, bytes, p50/p95/p99) to the `target/` folder for
-  automated runs.
