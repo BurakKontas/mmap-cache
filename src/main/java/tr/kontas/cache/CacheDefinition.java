@@ -26,19 +26,6 @@ public final class CacheDefinition<V> {
     /** Default max value size in bytes when not using dynamic sizing. */
     public static final int DEFAULT_MAX_VALUE_BYTES = 1024;
 
-    // Private no-arg constructor to document and prevent the implicit default constructor warning
-
-    /**
-     * Private no-arg constructor for frameworks and tools that require it. Not for general use.
-     */
-    private CacheDefinition() {
-        this.name = null;
-        this.supplier = null;
-        this.keyExtractor = null;
-        this.serializer = null;
-        this.deserializer = null;
-        this.ttl = null;
-    }
 
     // ── Basic Definition ───────────────────────────────────────────────────
     private final String name;
