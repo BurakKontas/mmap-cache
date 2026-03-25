@@ -18,8 +18,27 @@ import java.util.function.Function;
 @Getter
 @Builder(toBuilder = true)
 public final class CacheDefinition<V> {
+    /**
+     * Default max key size in bytes when not using dynamic sizing.
+     */
     public static final int DEFAULT_MAX_KEY_BYTES = 256;
+
+    /** Default max value size in bytes when not using dynamic sizing. */
     public static final int DEFAULT_MAX_VALUE_BYTES = 1024;
+
+    // Private no-arg constructor to document and prevent the implicit default constructor warning
+
+    /**
+     * Private no-arg constructor for frameworks and tools that require it. Not for general use.
+     */
+    private CacheDefinition() {
+        this.name = null;
+        this.supplier = null;
+        this.keyExtractor = null;
+        this.serializer = null;
+        this.deserializer = null;
+        this.ttl = null;
+    }
 
     // ── Basic Definition ───────────────────────────────────────────────────
     private final String name;
@@ -78,6 +97,12 @@ public final class CacheDefinition<V> {
     private final Duration memoryCacheIdleTtl = null;
 
     // ── Helpers ────────────────────────────────────────────────────────────
+
+    /**
+     * Default serializer helper that converts a {@link CacheRow#getValueAsString()} into UTF-8 bytes.
+     *
+     * @return serializer function
+     */
     public static Function<CacheRow, byte[]> defaultSerializer() {
         return row -> {
             String s = row.getValueAsString();
@@ -85,6 +110,13 @@ public final class CacheDefinition<V> {
         };
     }
 
+    /**
+     * Default deserializer helper that converts UTF-8 bytes to a value using the provided string parser.
+     *
+     * @param stringParser parser that converts the decoded String into the target value type
+     * @param <V>          value type
+     * @return deserializer function
+     */
     public static <V> Function<byte[], V> defaultDeserializer(Function<String, V> stringParser) {
         return bytes -> {
             if (bytes == null || bytes.length == 0) return null;
@@ -93,11 +125,23 @@ public final class CacheDefinition<V> {
         };
     }
 
+    /**
+     * Record size using the configured max key/value bytes.
+     *
+     * @return record size in bytes
+     */
     public int recordSize() {
         return Long.BYTES + Short.BYTES + maxKeyBytes
                 + Short.BYTES + maxValueBytes + Long.BYTES;
     }
 
+    /**
+     * Record size using resolved max key/value bytes (used during dynamic sizing).
+     *
+     * @param resolvedMaxKeyBytes   resolved max key bytes
+     * @param resolvedMaxValueBytes resolved max value bytes
+     * @return record size in bytes
+     */
     public int recordSize(int resolvedMaxKeyBytes, int resolvedMaxValueBytes) {
         return Long.BYTES + Short.BYTES + resolvedMaxKeyBytes
                 + Short.BYTES + resolvedMaxValueBytes + Long.BYTES;

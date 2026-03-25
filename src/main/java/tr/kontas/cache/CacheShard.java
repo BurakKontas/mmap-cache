@@ -12,6 +12,10 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 
+/**
+ * Represents a single on-disk data shard backed by a memory-mapped file.
+ * Each shard stores fixed-size records and provides read/write/flush/close operations.
+ */
 @Slf4j
 public class CacheShard implements AutoCloseable {
     @Getter
@@ -26,6 +30,15 @@ public class CacheShard implements AutoCloseable {
     @Getter
     private boolean closed = false;
 
+    /**
+     * Create a CacheShard given an absolute file path.
+     *
+     * @param filePath      file path for the shard
+     * @param recordSize    size of each record in bytes
+     * @param capacity      number of records the shard can hold
+     * @param maxKeyBytes   max key bytes
+     * @param maxValueBytes max value bytes
+     */
     public CacheShard(String filePath, int recordSize, int capacity, int maxKeyBytes, int maxValueBytes) {
         this.filePath = filePath;
         this.recordSize = recordSize;
@@ -39,10 +52,28 @@ public class CacheShard implements AutoCloseable {
         }
     }
 
+    /**
+     * Create a CacheShard from a Path.
+     *
+     * @param path         Path to the shard file
+     * @param recordSize   size of each record in bytes
+     * @param capacity     number of records the shard can hold
+     * @param maxKeyBytes  max key bytes
+     * @param maxValueBytes max value bytes
+     */
     public CacheShard(Path path, int recordSize, int capacity, int maxKeyBytes, int maxValueBytes) {
         this(path.toString(), recordSize, capacity, maxKeyBytes, maxValueBytes);
     }
 
+    /**
+     * Creates a CacheShard from a File instance.
+     *
+     * @param file         File object for the shard
+     * @param recordSize   size of each record in bytes
+     * @param capacity     number of records the shard can hold
+     * @param maxKeyBytes  max key bytes
+     * @param maxValueBytes max value bytes
+     */
     public CacheShard(File file, int recordSize, int capacity, int maxKeyBytes, int maxValueBytes) {
         this(file.getAbsolutePath(), recordSize, capacity, maxKeyBytes, maxValueBytes);
     }
@@ -74,6 +105,13 @@ public class CacheShard implements AutoCloseable {
         this.buffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, fileSize);
     }
 
+    /**
+     * Writes the provided entry into the shard at the given slot offset.
+     *
+     * @param offset slot index within the shard
+     * @param entry  entry to write (reused by caller)
+     * @return true if write succeeded; false when value exceeded maxValueBytes
+     */
     public boolean write(int offset, CacheEntry entry) {
         if (closed) throw new IllegalStateException("Shard closed: " + filePath);
         int pos = offset * recordSize;
@@ -82,6 +120,12 @@ public class CacheShard implements AutoCloseable {
         return entry.serialize(buffer);
     }
 
+    /**
+     * Reads an entry from the shard at the given offset.
+     *
+     * @param offset slot index
+     * @return deserialized CacheEntry
+     */
     public CacheEntry read(int offset) {
         if (closed) throw new IllegalStateException("Shard closed: " + filePath);
         int pos = offset * recordSize;
@@ -94,6 +138,9 @@ public class CacheShard implements AutoCloseable {
         return entry;
     }
 
+    /**
+     * Forces any in-memory changes to the underlying file.
+     */
     public void flush() {
         if (closed) return;
         try {
@@ -103,6 +150,9 @@ public class CacheShard implements AutoCloseable {
         }
     }
 
+    /**
+     * Closes this shard and releases resources.
+     */
     @Override
     public void close() {
         if (closed) return;

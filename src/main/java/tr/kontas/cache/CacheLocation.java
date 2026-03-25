@@ -24,15 +24,31 @@ public final class CacheLocation implements BytesMarshallable {
     public CacheLocation() {
     }
 
+    /**
+     * Create a new CacheLocation pointing to a position inside a data shard.
+     *
+     * @param shardId target shard id
+     * @param offset  slot offset inside the shard
+     */
     public CacheLocation(int shardId, int offset) {
         this.shardId = shardId;
         this.offset = offset;
     }
 
+    /**
+     * Returns the shard id where the record lives.
+     *
+     * @return shard id
+     */
     public int shardId() {
         return shardId;
     }
 
+    /**
+     * Returns the slot offset within the shard file.
+     *
+     * @return offset index
+     */
     public int offset() {
         return offset;
     }

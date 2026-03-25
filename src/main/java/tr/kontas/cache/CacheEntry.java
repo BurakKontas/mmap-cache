@@ -6,6 +6,12 @@ import lombok.extern.slf4j.Slf4j;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 
+/**
+ * Represents a fixed-size cache record used inside a shard file.
+ * <p>
+ * Instances are reused during writes to avoid per-row allocations; callers
+ * should not retain references to these objects after writing to a shard.
+ */
 @Slf4j
 @Getter
 public final class CacheEntry {
@@ -17,26 +23,27 @@ public final class CacheEntry {
     private String key;
     private byte[] valueBytes;
 
+    /**
+     * Creates a new CacheEntry helper used for reads/writes.
+     *
+     * @param maxKeyBytes   maximum key bytes for this entry
+     * @param maxValueBytes maximum value bytes for this entry
+     */
     public CacheEntry(int maxKeyBytes, int maxValueBytes) {
         this.maxKeyBytes = maxKeyBytes;
         this.maxValueBytes = maxValueBytes;
     }
 
     /**
-     * Resets this reusable object with new row data.
-     * <p>
-     * CacheManager reuses a single {@code CacheEntry} instance in the write loop
-     * instead of allocating {@code new CacheEntry(...)} per row.
-     * This is safe because {@link CacheShard#write(int, CacheEntry)} serializes
-     * the entry immediately into the ByteBuffer.
+     * Full constructor used by tests to create independent entry instances.
+     *
+     * @param id            entry id
+     * @param timestamp     entry timestamp
+     * @param key           entry key
+     * @param valueBytes    entry bytes
+     * @param maxKeyBytes   max key bytes
+     * @param maxValueBytes max value bytes
      */
-    public void reset(long id, long timestamp, String key, byte[] valueBytes) {
-        this.id         = id;
-        this.timestamp  = timestamp;
-        this.key        = key;
-        this.valueBytes = valueBytes;
-    }
-
     public CacheEntry(long id, long timestamp, String key, byte[] valueBytes,
                       int maxKeyBytes, int maxValueBytes) {
         this.id = id;
@@ -51,6 +58,20 @@ public final class CacheEntry {
         if (count > 0) buf.position(buf.position() + count);
     }
 
+    public void reset(long id, long timestamp, String key, byte[] valueBytes) {
+        this.id = id;
+        this.timestamp = timestamp;
+        this.key = key;
+        this.valueBytes = valueBytes;
+    }
+
+    /**
+     * Serializes this cache entry to the given ByteBuffer.
+     *
+     * @param buf target buffer
+     * @return true if the entry was successfully serialized, false if the value
+     * bytes were too large to fit
+     */
     public boolean serialize(ByteBuffer buf) {
         buf.putLong(id);
 
@@ -76,6 +97,11 @@ public final class CacheEntry {
         return true;
     }
 
+    /**
+     * Deserializes this cache entry from the given ByteBuffer.
+     *
+     * @param buf source buffer
+     */
     public void deserialize(ByteBuffer buf) {
         this.id = buf.getLong();
 

@@ -10,6 +10,14 @@ import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * Immutable snapshot of one cache version.
+ * <p>
+ * Holds data shards, index shards, creation metadata, and the optional
+ * in-memory L1 cache used during read operations.
+ *
+ * @param <V> deserialized value type
+ */
 @Slf4j
 @Getter
 public final class CacheVersion<V> {
@@ -20,21 +28,13 @@ public final class CacheVersion<V> {
     private final long createdAt;
 
     /**
-     * @deprecated Use {@link #getIndexShards()} for sharded access.
+     * Constructs a new cache version.
+     *
+     * @param versionDir  path to the version directory on disk
+     * @param shards      array of data shards for this version
+     * @param indexShards array of index shard maps (may be null or empty)
+     * @param definition  the cache definition used to build this version
      */
-    @Deprecated
-    public Map<String, CacheLocation> getIndex() {
-        return indexShards != null && indexShards.length > 0 ? indexShards[0] : null;
-    }
-
-    /**
-     * Caffeine in-memory layer.
-     * Null if memoryCacheMaxSize == 0; reads go directly to the shard.
-     */
-    private final Cache<String, V> memoryCache;
-
-    private final AtomicInteger readerCount = new AtomicInteger();
-
     public CacheVersion(
             Path versionDir,
             CacheShard[] shards,
@@ -50,6 +50,11 @@ public final class CacheVersion<V> {
 
     /**
      * Backward-compatibility/Test constructor.
+     *
+     * @param versionDir path to the version directory on disk
+     * @param shards     array of data shards for this version
+     * @param index      single index map kept for backwards compatibility (may be null)
+     * @param definition the cache definition used to build this version
      */
     @SuppressWarnings("unchecked")
     public CacheVersion(
@@ -59,6 +64,33 @@ public final class CacheVersion<V> {
             CacheDefinition<V> definition
     ) {
         this(versionDir, shards, index == null ? new Map[0] : new Map[]{index}, definition);
+    }
+
+    /**
+     * Caffeine in-memory layer.
+     * Null if memoryCacheMaxSize == 0; reads go directly to the shard.
+     */
+    private final Cache<String, V> memoryCache;
+
+    private final AtomicInteger readerCount = new AtomicInteger();
+
+    /**
+     * @deprecated Use {@link #getIndexShards()} for sharded access.
+     *
+     * @return first index shard for backward compatibility, or null when unavailable
+     */
+    @Deprecated
+    public Map<String, CacheLocation> getIndex() {
+        return indexShards != null && indexShards.length > 0 ? indexShards[0] : null;
+    }
+
+    /**
+     * Returns the index shard array backing this cache version.
+     *
+     * @return index shard maps (may be null or empty)
+     */
+    public Map<String, CacheLocation>[] getIndexShards() {
+        return indexShards;
     }
 
     // ── Caffeine cache builder ───────────────────────────────────────────────
@@ -86,11 +118,23 @@ public final class CacheVersion<V> {
 
     // ── Cache access helpers  ────────────────────────────────────────────────
 
+    /**
+     * Reads a value from the in-memory L1 cache if present.
+     *
+     * @param key lookup key
+     * @return cached value or null when not present or memory cache is disabled
+     */
     public V getFromMemory(String key) {
         if (memoryCache == null) return null;
         return memoryCache.getIfPresent(key);
     }
 
+    /**
+     * Puts a value into the in-memory L1 cache when enabled.
+     *
+     * @param key   lookup key
+     * @param value value to cache
+     */
     public void putToMemory(String key, V value) {
         if (memoryCache == null) return;
         memoryCache.put(key, value);
@@ -98,14 +142,25 @@ public final class CacheVersion<V> {
 
     // ── Reader counter ───────────────────────────────────────────────────────
 
+    /**
+     * Increment the active reader count for this version. Call when starting a read.
+     */
     public void acquireReader() {
         readerCount.incrementAndGet();
     }
 
+    /**
+     * Decrement the active reader count for this version. Call when finishing a read.
+     */
     public void releaseReader() {
         readerCount.decrementAndGet();
     }
 
+    /**
+     * Returns whether this version currently has active readers.
+     *
+     * @return true when there are active readers
+     */
     public boolean hasActiveReaders() {
         return readerCount.get() > 0;
     }

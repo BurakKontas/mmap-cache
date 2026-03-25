@@ -647,6 +647,10 @@ public final class CacheManager {
     }
 
     // ── Builder ──────────────────────────────────────────────────────────────
+
+    /**
+     * Builder for configuring a {@link CacheManager} instance.
+     */
     public static final class Builder {
         private final Path basePath;
         private int shardCapacity = 100_000;  // raised from 1 000
@@ -656,6 +660,11 @@ public final class CacheManager {
         private String chronicleAverageKey = "key-00000000";
         private int indexShardCount = 16;
 
+        /**
+         * Create a new builder for the given base path.
+         *
+         * @param basePath root directory for cache data
+         */
         public Builder(Path basePath) {
             if (basePath == null) throw new IllegalArgumentException("basePath cannot be null");
             this.basePath = basePath;
@@ -663,6 +672,9 @@ public final class CacheManager {
 
         /**
          * Sets maximum row count per data shard file.
+         *
+         * @param v capacity (rows per shard)
+         * @return this builder
          */
         public Builder shardCapacity(int v) {
             this.shardCapacity = v;
@@ -671,6 +683,9 @@ public final class CacheManager {
 
         /**
          * Sets default max key byte length for non-dynamic cache definitions.
+         *
+         * @param v max key bytes
+         * @return this builder
          */
         public Builder defaultMaxKeyBytes(int v) {
             this.defaultMaxKeyBytes = v;
@@ -679,6 +694,9 @@ public final class CacheManager {
 
         /**
          * Sets default max value byte length for non-dynamic cache definitions.
+         *
+         * @param v max value bytes
+         * @return this builder
          */
         public Builder defaultMaxValueBytes(int v) {
             this.defaultMaxValueBytes = v;
@@ -687,6 +705,9 @@ public final class CacheManager {
 
         /**
          * Sets manager-wide default Caffeine size for cache definitions with 0 memory size.
+         *
+         * @param v memory cache max size
+         * @return this builder
          */
         public Builder memoryCacheSize(int v) {
             if (v < 0) throw new IllegalArgumentException("memoryCacheSize cannot be negative");
@@ -696,6 +717,9 @@ public final class CacheManager {
 
         /**
          * Sets ChronicleMap average key template used for index sizing.
+         *
+         * @param v average key template
+         * @return this builder
          */
         public Builder chronicleAverageKey(String v) {
             if (v == null || v.isEmpty())
@@ -707,6 +731,9 @@ public final class CacheManager {
         /**
          * Sets number of ChronicleMap index shards.
          * Increase this value for very large keysets on Windows to stay below mmap file limits.
+         *
+         * @param v shard count (>=1)
+         * @return this builder
          */
         public Builder indexShardCount(int v) {
             if (v < 1) throw new IllegalArgumentException("indexShardCount must be >= 1");
@@ -716,6 +743,8 @@ public final class CacheManager {
 
         /**
          * Builds a configured {@link CacheManager} instance.
+         *
+         * @return configured CacheManager
          */
         public CacheManager build() {
             return new CacheManager(
