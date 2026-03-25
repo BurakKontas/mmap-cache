@@ -8,6 +8,7 @@ import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Comparator;
 import java.util.Map;
 import java.util.stream.Stream;
 
@@ -19,9 +20,19 @@ public class CacheTests {
     @AfterEach
     void cleanup() throws Exception {
         if (tmpDir != null && Files.exists(tmpDir)) {
-            Files.walk(tmpDir)
-                    .sorted((a, b) -> b.compareTo(a))
-                    .forEach(p -> p.toFile().delete());
+            try {
+                try (java.util.stream.Stream<java.nio.file.Path> s = Files.walk(tmpDir)) {
+                    s.sorted(Comparator.reverseOrder())
+                            .forEach(p -> {
+                                try {
+                                    p.toFile().delete();
+                                } catch (Exception ignored) {
+                                }
+                            });
+                }
+            } catch (java.nio.file.NoSuchFileException | java.io.UncheckedIOException ignored) {
+                // Some platforms/CI may have transient file disappearance; ignore cleanup failures
+            }
         }
         tmpDir = null;
     }
