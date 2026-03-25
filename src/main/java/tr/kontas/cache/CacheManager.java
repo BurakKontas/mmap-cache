@@ -732,7 +732,7 @@ public final class CacheManager {
          * Sets number of ChronicleMap index shards.
          * Increase this value for very large keysets on Windows to stay below mmap file limits.
          *
-         * @param v shard count (>=1)
+         * @param v shard count ({@literal >= 1})
          * @return this builder
          */
         public Builder indexShardCount(int v) {
