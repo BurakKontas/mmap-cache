@@ -17,10 +17,19 @@ This README explains quick usage (builder + definition), sizing, performance con
 
 ---
 
-## Example: initialize `CacheManager` (recommended via builder)
+## Requirements
 
-The preferred way to initialize the manager is with the builder. This shows the important knobs we added: shard
-capacity, overall memory-cache default, and Chronicle `averageKey` configuration.
+- Primary development/CI target: **JDK 11** (the project `pom.xml` uses `<maven.compiler.release>11</maven.compiler.release>`).
+- Tests can run on newer JDKs (17, 21, 25) but note the compatibility caveats in Troubleshooting below.
+- Maven 3.6+ to build and run tests.
+
+---
+
+## Quick usage examples
+
+(kept from original README: manager builder + definition examples)
+
+### Initialize `CacheManager` (recommended via builder)
 
 ```java
 import tr.kontas.cache.CacheManager;
@@ -37,19 +46,7 @@ CacheManager.Builder builder = CacheManager.builder(base)
 CacheManager.initialize(builder);
 ```
 
-Notes:
-
-- `memoryCacheSize` is a manager-wide default that will be applied to definitions which do not set their own
-  `memoryCacheMaxSize` (only when `memoryCacheMaxSize == 0`).
-- If you prefer to rely entirely on ChronicleMap (off-heap index + no heap L1 cache), set `memoryCacheSize(0)` and use
-  Chronicle for the index.
-
----
-
-## Example: `CacheDefinition` with Caffeine options
-
-The `CacheDefinition` builder exposes the Caffeine-related options you requested: `memoryCacheMaxSize`,
-`memoryCacheTtl` (expire-after-write), and `memoryCacheIdleTtl` (expire-after-access).
+### `CacheDefinition` with Caffeine options
 
 ```java
 import tr.kontas.cache.CacheDefinition;
@@ -73,15 +70,9 @@ CacheDefinition<String> def = CacheDefinition.<String>builder()
 CacheManager.register(def);
 ```
 
-Behavior notes:
-
-- If `memoryCacheMaxSize <= 0`, no Caffeine cache is created and reads go directly to the mmap shards.
-- If `memoryCacheTtl` is non-null and non-zero, the Caffeine builder will apply `expireAfterWrite(Duration)`.
-- If `memoryCacheIdleTtl` is non-null and non-zero, the Caffeine builder will apply `expireAfterAccess(Duration)`.
-
 ---
 
-## How disk size is calculated (record layout)
+## Disk layout & sizing
 
 Each record uses a fixed layout:
 
@@ -104,8 +95,6 @@ totalDiskBytes ≈ shardFileSize * shardCount
 Example: `maxKeyBytes=32`, `maxValueBytes=128` → recordSize = 180 bytes. With 1,000,000 rows and
 `shardCapacity=100_000` → 10 shards × 100k × 180 ≈ 172 MB.
 
-The index (ConcurrentHashMap or ChronicleMap) consumes additional RAM or disk depending on the choice.
-
 ---
 
 ## ChronicleMap & tuning tips
@@ -115,6 +104,87 @@ The index (ConcurrentHashMap or ChronicleMap) consumes additional RAM or disk de
 - `chronicleAverageKey` on the manager builder is a convenience to set a reproducible average key template (used by our
   builder when creating a ChronicleMap index).
 - ChronicleMap keeps the index off-heap which is recommended for very large keysets (tens of millions of keys).
+
+---
+
+## Build, Test & Coverage (commands)
+
+From the project root:
+
+- Build + run tests:
+
+```bash
+mvn clean install
+```
+
+- Run only tests:
+
+```bash
+mvn test
+```
+
+- Run a single test class (useful when iterating):
+
+```bash
+mvn -Dtest=tr.kontas.cache.unit.CacheTests test
+```
+
+- Generate JaCoCo coverage report:
+
+```bash
+mvn test jacoco:report
+# Open the report: target/site/jacoco/index.html
+```
+
+If you need to run tests from IntelliJ or another IDE under a newer JDK and you see Byte Buddy / Mockito errors,
+include these VM options in the test runner:
+
+```
+-Dnet.bytebuddy.experimental=true -XX:+EnableDynamicAgentLoading
+```
+
+(See Troubleshooting below for more details.)
+
+---
+
+## CI / Release notes
+
+- Some CI workflows activate a `release` profile (for packaging/deploy). If your CI uses `-Prelease`, ensure your
+  `distributionManagement` is configured with a repository or set `maven.deploy.skip=true` to avoid an attempted deploy.
+- This repository includes a `release` profile placeholder in `pom.xml` which sets `maven.deploy.skip=true` by default to
+  avoid accidental deploys in PR/CI runs. If you want the CI to deploy, replace or override the profile to provide real
+  registry configuration.
+
+Example: skipping deploy in CI for dry-run releases
+
+```bash
+mvn -Prelease -DskipTests install
+```
+
+To actually deploy, configure `distributionManagement` in `pom.xml` or use `-DaltDeploymentRepository` with
+`mvn deploy`.
+
+---
+
+## Troubleshooting
+
+1. Byte Buddy / Mockito inline errors on newer JDKs (e.g. Java 25):
+   - Symptom: stack-trace mentioning Byte Buddy, "Java 25 (69) is not supported...", or Mockito unable to inline mock classes.
+   - Workaround: run tests with the experimental Byte Buddy flag and enable dynamic agent loading:
+
+     ```bash
+     mvn -DskipTests=false test -DargLine="-Dnet.bytebuddy.experimental=true -XX:+EnableDynamicAgentLoading"
+     ```
+
+   - Long-term fix: upgrade `net.bytebuddy` and `mockito-inline` to versions that officially support your JDK.
+
+2. SLF4J "No providers were found" warning during tests:
+   - Fix: ensure a test-scoped SLF4J implementation is available (e.g. `slf4j-simple` in `test` scope). The project includes
+     a test-scoped `slf4j-simple` dependency to silence the warning.
+
+3. Flaky teardown (`NoSuchFileException` in `@AfterEach`) on CI:
+   - Cause: test temp folders/files can be removed concurrently or by other processes.
+   - Mitigation: test teardown is tolerant of missing files (catch and ignore `NoSuchFileException` / `UncheckedIOException`).
 
 ---
 
@@ -133,8 +203,6 @@ Record the following metrics per run:
 - read latencies: average, p50, p95, p99 (µs or ms)
 - heap usage and GC statistics (before/after)
 
-A minimal PowerShell snippet for folder size is included in the project README (see **Measuring current cache folder
-size**).
 
 Notes that affect results:
 
