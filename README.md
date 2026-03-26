@@ -359,6 +359,10 @@ proportionally for datasets above ~50M keys to stay within the OS mmap file size
 
 ---
 
+## Examples
+
+See examples in `test/java/tr/kontas/cache/example` folder.
+
 ## License
 
 This repository is licensed under GNU GPL v3.0 (see `LICENSE`).
