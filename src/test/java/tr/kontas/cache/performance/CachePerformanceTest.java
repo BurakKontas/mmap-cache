@@ -16,6 +16,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
+// to enable ChronicleMap add all --add-opens and --add-exports VM options
 /*
 -Xms8g
 -Xmx16g
@@ -339,7 +340,7 @@ public class CachePerformanceTest {
         return (long) (sorted[lower] * (1 - fraction) + sorted[upper] * fraction);
     }
 
-    private static void printSystemInfo() {
+    public static void printSystemInfo() {
         System.out.println("=============== SYSTEM INFO ===============");
 
         Runtime runtime = Runtime.getRuntime();
