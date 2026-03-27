@@ -72,7 +72,24 @@ public final class CacheVersion<V> {
      */
     private final Cache<String, V> memoryCache;
 
+    // ── Reader drain infrastructure ──────────────────────────────────────────
+    //
+    // FIX: replaced the busy-wait loop in CacheManager.cleanupOldVersion
+    // (Thread.sleep(50) polling hasActiveReaders()) with a monitor-based
+    // wait/notify mechanism.  When the last reader releases, drainMonitor is
+    // notified, allowing the cleanup thread to wake immediately instead of
+    // burning CPU in a polling loop.
+    //
+    // Protocol:
+    //   1. acquireReader()  — called inside the StampedLock read section in
+    //      CacheManager.getFromSlot before any data access.
+    //   2. releaseReader()  — called in the finally block of getFromSlot.
+    //   3. awaitDrained()   — called by cleanupOldVersion AFTER the version
+    //      has been swapped out; waits until readerCount == 0.
+    //   4. close()          — called after awaitDrained() returns.
+    //
     private final AtomicInteger readerCount = new AtomicInteger();
+    private final Object drainMonitor = new Object();
 
     /**
      * @deprecated Use {@link #getIndexShards()} for sharded access.
@@ -144,6 +161,8 @@ public final class CacheVersion<V> {
 
     /**
      * Increment the active reader count for this version. Call when starting a read.
+     * Must be called while holding the {@code CacheSlot} read lock so that the
+     * increment is atomic with respect to a concurrent version swap.
      */
     public void acquireReader() {
         readerCount.incrementAndGet();
@@ -151,9 +170,15 @@ public final class CacheVersion<V> {
 
     /**
      * Decrement the active reader count for this version. Call when finishing a read.
+     * When the count reaches zero the drain monitor is notified so that any thread
+     * blocked in {@link #awaitDrained()} can wake up immediately.
      */
     public void releaseReader() {
-        readerCount.decrementAndGet();
+        if (readerCount.decrementAndGet() == 0) {
+            synchronized (drainMonitor) {
+                drainMonitor.notifyAll();
+            }
+        }
     }
 
     /**
@@ -165,11 +190,39 @@ public final class CacheVersion<V> {
         return readerCount.get() > 0;
     }
 
+    /**
+     * Blocks the calling thread until all active readers have released this version.
+     *
+     * <p>This replaces the previous busy-wait loop
+     * ({@code while (hasActiveReaders()) Thread.sleep(50)}) in
+     * {@code CacheManager.cleanupOldVersion}.  The cleanup thread now sleeps
+     * in the OS wait queue and is woken by {@link #releaseReader()} as soon as
+     * the last reader finishes — typically sub-millisecond latency vs. an
+     * average 25 ms delay with the old approach.
+     *
+     * <p>A 100 ms timeout is used as a safety net in case a notification is
+     * missed due to a spurious wake-up; the loop re-evaluates the condition
+     * after each wake-up.
+     *
+     * @throws InterruptedException if the calling thread is interrupted while waiting
+     */
+    public void awaitDrained() throws InterruptedException {
+        if (!hasActiveReaders()) return;
+        synchronized (drainMonitor) {
+            while (readerCount.get() > 0) {
+                drainMonitor.wait(100);
+            }
+        }
+    }
+
     // ── Shutdown ─────────────────────────────────────────────────────────────
 
     /**
      * Closes the shards and the Chronicle Map index.
      * Caffeine cache is cleaned by the GC; explicit invalidation is sufficient.
+     *
+     * <p>Callers must ensure {@link #awaitDrained()} has returned before calling
+     * {@code close()} to avoid closing resources that are still in use.
      */
     public void close() {
         // 1. Invalidate Caffeine cache

@@ -66,8 +66,20 @@ public class CachePerformanceTest {
 
         System.out.println("=============== CACHE PERFORMANCE TEST ===============");
 
+        Path tempDir = Files.createTempDirectory("cache_perf");
+
+        CacheManager.Builder builder = CacheManager.builder(tempDir)
+                .shardCapacity(100_000)
+                .memoryCacheSize(0)
+                .defaultMaxKeyBytes(32)
+                .defaultMaxValueBytes(256)
+                .indexShardCount(16)
+                .chronicleAverageKey("key-00000000");
+
+        CacheManager.initialize(builder);
+
         for (int size : DEFAULT_SIZES) {
-            runTestForSize(size);
+            runTestForSize(size, tempDir);
             System.out.println("------------------------------------------------------");
         }
 
@@ -75,7 +87,7 @@ public class CachePerformanceTest {
         System.out.println("All performance runs completed.");
     }
 
-    private static void runTestForSize(int numRecords) throws Exception {
+    private static void runTestForSize(int numRecords, Path tempDir) throws Exception {
         System.out.printf("Test başlıyor: %,d kayıt...%n", numRecords);
 
         // Memory baseline
@@ -87,18 +99,6 @@ public class CachePerformanceTest {
         long gcCountBefore = getGcCount();
         long gcTimeBefore = getGcTime();
         long diskReadBefore = getProcessReadBytes(); // Linux only, returns 0 if unsupported
-
-        Path tempDir = Files.createTempDirectory("cache_perf_" + numRecords);
-
-        CacheManager.Builder builder = CacheManager.builder(tempDir)
-                .shardCapacity(100_000)
-                .memoryCacheSize(0)
-                .defaultMaxKeyBytes(32)
-                .defaultMaxValueBytes(256)
-                .indexShardCount(16)
-                .chronicleAverageKey("key-00000000");
-
-        CacheManager.initialize(builder);
 
         String cacheName = "perfCache";
 
@@ -145,7 +145,18 @@ public class CachePerformanceTest {
         // Warmup for JIT
         int warmupCount = Math.min(1_000, readCount);
         for (int i = 0; i < warmupCount; i++) {
-            CacheManager.get(cacheName, "key-" + random.nextInt(numRecords));
+            int idx = random.nextInt(numRecords);
+            String key = "key-" + idx;
+
+            String expected = "value-" + idx;
+            String received = CacheManager.get(cacheName, key);
+
+            if (!Objects.equals(expected, received)) {
+                throw new IllegalStateException(
+                        String.format("Warmup validation failed! key=%s expected=%s received=%s",
+                                key, expected, received)
+                );
+            }
         }
 
         // ================= READ PHASE =================

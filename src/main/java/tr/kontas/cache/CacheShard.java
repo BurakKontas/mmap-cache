@@ -15,6 +15,14 @@ import java.nio.file.StandardOpenOption;
 /**
  * Represents a single on-disk data shard backed by a memory-mapped file.
  * Each shard stores fixed-size records and provides read/write/flush/close operations.
+ *
+ * <p><b>Thread safety:</b> {@link #read(int)} and {@link #write(int, CacheEntry)} are
+ * fully thread-safe. Each call creates a per-call {@link ByteBuffer#duplicate() duplicate}
+ * of the shared {@link MappedByteBuffer}, giving every caller its own independent
+ * position/limit state while sharing the underlying mapped memory.  Concurrent reads
+ * and writes to <em>different</em> slot offsets therefore do not interfere with each
+ * other; the OS-level memory mapping guarantees atomic word-aligned access for the
+ * fixed-size primitive fields written by {@link CacheEntry}.
  */
 @Slf4j
 public class CacheShard implements AutoCloseable {
@@ -108,20 +116,32 @@ public class CacheShard implements AutoCloseable {
     /**
      * Writes the provided entry into the shard at the given slot offset.
      *
+     * <p><b>Thread safety:</b> safe to call concurrently from multiple threads as long as
+     * each call targets a distinct {@code offset}. A per-call {@link ByteBuffer#duplicate()}
+     * is used so that position mutations never race between callers.
+     *
      * @param offset slot index within the shard
-     * @param entry  entry to write (reused by caller)
+     * @param entry  entry to write
      * @return true if write succeeded; false when value exceeded maxValueBytes
      */
     public boolean write(int offset, CacheEntry entry) {
         if (closed) throw new IllegalStateException("Shard closed: " + filePath);
         int pos = offset * recordSize;
         assertBounds(pos, "write");
-        buffer.position(pos);
-        return entry.serialize(buffer);
+        // FIX: use duplicate() so each caller has its own position cursor.
+        // The duplicate shares the same backing mapped memory, so data is
+        // written to the correct file offset without mutating the shared buffer.
+        ByteBuffer local = buffer.duplicate();
+        local.position(pos);
+        return entry.serialize(local);
     }
 
     /**
      * Reads an entry from the shard at the given offset.
+     *
+     * <p><b>Thread safety:</b> safe to call concurrently from multiple threads. A
+     * per-call {@link ByteBuffer#duplicate()} isolates the position cursor from other
+     * concurrent callers.
      *
      * @param offset slot index
      * @return deserialized CacheEntry
@@ -130,8 +150,12 @@ public class CacheShard implements AutoCloseable {
         if (closed) throw new IllegalStateException("Shard closed: " + filePath);
         int pos = offset * recordSize;
         assertBounds(pos, "read");
-        buffer.position(pos);
-        ByteBuffer slice = buffer.slice();
+        // FIX: use duplicate() for an independent position cursor.
+        // slice() is then called on the duplicate so CacheEntry.deserialize()
+        // sees a buffer starting exactly at the record boundary.
+        ByteBuffer local = buffer.duplicate();
+        local.position(pos);
+        ByteBuffer slice = local.slice();
         slice.limit(recordSize);
         CacheEntry entry = new CacheEntry(maxKeyBytes, maxValueBytes);
         entry.deserialize(slice);
