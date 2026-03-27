@@ -7,12 +7,12 @@
 
     <groupId>tr.kontas.cache</groupId>
     <artifactId>mmap-cache</artifactId>
-    <version>1.1.0</version>
+    <version>1.1.1</version>
 
     <name>Memory Mapped Cache</name>
 
     <description>
-        A compact, production-ready Java caching library designed to store and serve very large key-value datasets with minimal heap pressure.
+        A compact, production-ready Java caching library designed to store and serve very large key-value datasets with minimal heap pressure. Data is written as fixed-size binary records to memory-mapped shard files (mmap) while an optional in-heap Caffeine layer serves hot keys. An off-heap ChronicleMap index can be used for very large key sets.
     </description>
 
     <url>https://github.com/BurakKontas/mmap-cache</url>
