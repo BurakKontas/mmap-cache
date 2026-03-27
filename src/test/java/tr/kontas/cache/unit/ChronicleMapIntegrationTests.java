@@ -35,13 +35,15 @@ public class ChronicleMapIntegrationTests {
         Path tmp = Files.createTempDirectory("chr_index_test");
         Path indexFile = tmp.resolve("index.chm");
 
+        // production signature includes averageKeyBytes (int) as the 4th parameter
         Method m = CacheManager.class.getDeclaredMethod(
-                "buildChronicleIndex", Path.class, int.class, String.class);
+                "buildChronicleIndex", Path.class, int.class, String.class, int.class);
         m.setAccessible(true);
 
         @SuppressWarnings("unchecked")
+        int avgBytes = "key-00000000".getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
         Map<String, CacheLocation> index =
-                (Map<String, CacheLocation>) m.invoke(null, indexFile, 100, "key-00000000");
+                (Map<String, CacheLocation>) m.invoke(null, indexFile, 100, "key-00000000", avgBytes);
 
         assertNotNull(index);
         assertInstanceOf(Closeable.class, index, "Chronicle Map should implement Closeable");
@@ -79,12 +81,13 @@ public class ChronicleMapIntegrationTests {
         Path indexFile = tmp.resolve("index.chm");
 
         Method m = CacheManager.class.getDeclaredMethod(
-                "buildChronicleIndex", Path.class, int.class, String.class);
+                "buildChronicleIndex", Path.class, int.class, String.class, int.class);
         m.setAccessible(true);
 
         @SuppressWarnings("unchecked")
+        int avgBytes = "key-0".getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
         Map<String, CacheLocation> index =
-                (Map<String, CacheLocation>) m.invoke(null, indexFile, 0, "key-0");
+                (Map<String, CacheLocation>) m.invoke(null, indexFile, 0, "key-0", avgBytes);
 
         assertNotNull(index);
         ((Closeable) index).close();
@@ -147,12 +150,13 @@ public class ChronicleMapIntegrationTests {
         Path indexFile = tmp.resolve("index.chm");
 
         Method m = CacheManager.class.getDeclaredMethod(
-                "buildChronicleIndex", Path.class, int.class, String.class);
+                // production signature includes averageKeyBytes (int) as the 4th parameter
+                "buildChronicleIndex", Path.class, int.class, String.class, int.class);
         m.setAccessible(true);
 
         @SuppressWarnings("unchecked")
         Map<String, CacheLocation> index =
-                (Map<String, CacheLocation>) m.invoke(null, indexFile, 10, "key-00000000");
+                (Map<String, CacheLocation>) m.invoke(null, indexFile, 10, "key-00000000", "key-00000000".getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
 
         index.put("x", new CacheLocation(0, 0));
 
@@ -209,13 +213,14 @@ public class ChronicleMapIntegrationTests {
         Path indexFile = tmp.resolve("roundtrip.chm");
 
         Method buildMethod = CacheManager.class.getDeclaredMethod(
-                "buildChronicleIndex", Path.class, int.class, String.class);
+                "buildChronicleIndex", Path.class, int.class, String.class, int.class);
         buildMethod.setAccessible(true);
 
         @SuppressWarnings("unchecked")
+        int avgBytes2 = "key-0000".getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
         Map<String, CacheLocation> index =
                 (Map<String, CacheLocation>) buildMethod.invoke(
-                        null, indexFile, 50, "key-0000");
+                        null, indexFile, 50, "key-0000", avgBytes2);
 
         // Chronicle writeMarshallable → serialize → disk'e yaz
         index.put("key-0001", new CacheLocation(2, 99));

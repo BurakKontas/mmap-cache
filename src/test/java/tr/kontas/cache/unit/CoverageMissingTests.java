@@ -63,10 +63,13 @@ public class CoverageMissingTests {
 
         // buildChronicleIndex: ensure returns a Closeable map and the file exists
         Path indexFile = Files.createTempDirectory("cov_mgr_idx").resolve("index.chm");
-        Method build = CacheManager.class.getDeclaredMethod("buildChronicleIndex", Path.class, int.class, String.class);
+        // NOTE: production code changed to add an extra int param (averageKeyBytes).
+        // Reflectively call the new 4-arg variant and pass the UTF-8 length of the average key.
+        Method build = CacheManager.class.getDeclaredMethod("buildChronicleIndex", Path.class, int.class, String.class, int.class);
         build.setAccessible(true);
         @SuppressWarnings("unchecked")
-        Map<String, Object> idx = (Map<String, Object>) build.invoke(null, indexFile, 1, "key-0000");
+        int avgBytes = "key-0000".getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        Map<String, Object> idx = (Map<String, Object>) build.invoke(null, indexFile, 1, "key-0000", avgBytes);
 
         assertNotNull(idx);
         assertTrue(idx instanceof Closeable || idx.getClass().getName().contains("Fallback"));

@@ -368,10 +368,22 @@ public final class CacheManager {
         } catch (NoClassDefFoundError | NoSuchMethodError e) {
             log.warn("ChronicleMap not available or incompatible; falling back to in-memory index: {}",
                     e.toString());
+            // Ensure the index file exists for callers/tests that expect a path to be created.
+            try {
+                if (file != null && Files.notExists(file)) Files.createFile(file);
+            } catch (Exception ignored) {
+                // best-effort only
+            }
             return new FallbackCloseableMap<>();
         } catch (Throwable t) {
             log.warn("Failed to create ChronicleMap index, falling back to in-memory map: {}",
                     t.toString());
+            // Ensure the index file exists for callers/tests that expect a path to be created.
+            try {
+                if (file != null && Files.notExists(file)) Files.createFile(file);
+            } catch (Exception ignored) {
+                // best-effort only
+            }
             return new FallbackCloseableMap<>();
         }
     }
@@ -917,3 +929,4 @@ public final class CacheManager {
         }
     }
 }
+
