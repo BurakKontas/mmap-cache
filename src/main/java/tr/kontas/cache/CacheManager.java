@@ -83,6 +83,7 @@ public final class CacheManager {
     // temporary byte[] each time.
     private final int chronicleAverageKeyBytes;
     private final int indexShardCount;
+    private final boolean useChronicleMap;
 
     private final ConcurrentHashMap<String, CacheSlot<?>> slots = new ConcurrentHashMap<>();
 
@@ -94,7 +95,8 @@ public final class CacheManager {
             int defaultMaxValueBytes,
             int memoryCacheSize,
             String chronicleAverageKey,
-            int indexShardCount
+            int indexShardCount,
+            boolean useChronicleMap
     ) {
         this.basePath = basePath;
         this.shardCapacity = shardCapacity;
@@ -104,6 +106,7 @@ public final class CacheManager {
         this.chronicleAverageKey = chronicleAverageKey;
         this.chronicleAverageKeyBytes = chronicleAverageKey.getBytes(StandardCharsets.UTF_8).length;
         this.indexShardCount = indexShardCount;
+        this.useChronicleMap = useChronicleMap;
 
         TTL_SCHEDULER.scheduleWithFixedDelay(
                 this::checkTtlExpiry,
@@ -126,7 +129,8 @@ public final class CacheManager {
                 CacheDefinition.DEFAULT_MAX_VALUE_BYTES,
                 0,
                 "key-00000000",
-                16
+                16,
+                true
         );
         purgeStaleVersions(basePath);
     }
@@ -336,8 +340,14 @@ public final class CacheManager {
      *                        avoids a redundant {@code getBytes()} allocation per shard
      */
     private static Map<String, CacheLocation> buildChronicleIndex(
-            Path file, int expectedEntries, String averageKey, int averageKeyBytes
+            Path file, int expectedEntries, String averageKey, int averageKeyBytes, boolean useChronicleMap
     ) throws IOException {
+        if (!useChronicleMap) {
+            log.warn("ChronicleMap usage disabled by configuration using in-memory index for file: {}",
+                    file != null ? file.toAbsolutePath() : "null");
+            return new FallbackCloseableMap<>();
+        }
+
         int entries = Math.max(expectedEntries, 1);
 
         // FIX: create parent dir ONLY — do NOT pre-create the file.
@@ -480,7 +490,7 @@ public final class CacheManager {
     }
 
     // ── Stale version purge ──────────────────────────────────────────────────
-    private static void purgeStaleVersions(Path basePath) {
+    public static void purgeStaleVersions(Path basePath) {
         if (!Files.exists(basePath)) return;
         try (var cacheDirs = Files.list(basePath)) {
             cacheDirs.forEach(cacheDir -> {
@@ -627,7 +637,7 @@ public final class CacheManager {
             for (int i = 0; i < indexShardCount; i++) {
                 Path chronicleFile = versionDir.resolve(String.format("index_%04d.chm", i));
                 indexShards[i] = buildChronicleIndex(
-                        chronicleFile, expectedPerShard, chronicleAverageKey, chronicleAverageKeyBytes
+                        chronicleFile, expectedPerShard, chronicleAverageKey, chronicleAverageKeyBytes, this.useChronicleMap
                 );
             }
 
@@ -802,6 +812,56 @@ public final class CacheManager {
         });
     }
 
+    public static void shutdown() {
+        if (INSTANCE == null) return;
+        closeAll(); // close all versions and clear slots
+
+        TTL_SCHEDULER.shutdown();
+        RELOAD_EXECUTOR.shutdown();
+
+        // Wait for termination (as before)
+        try {
+            if (!TTL_SCHEDULER.awaitTermination(5, TimeUnit.SECONDS)) {
+                TTL_SCHEDULER.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            TTL_SCHEDULER.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+
+        try {
+            if (!RELOAD_EXECUTOR.awaitTermination(10, TimeUnit.SECONDS)) {
+                RELOAD_EXECUTOR.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            RELOAD_EXECUTOR.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+
+        INSTANCE = null;
+    }
+
+    /**
+     * Closes all cache versions and clears all registered caches.
+     * Does not shut down the background executors (TTL scheduler and reload pool).
+     * Useful for resetting the manager between test runs while reusing executors.
+     */
+    public static synchronized void closeAll() {
+        CacheManager inst = INSTANCE;
+        if (inst == null) return;
+        for (CacheSlot<?> slot : inst.slots.values()) {
+            CacheVersion<?> version = slot.activeVersion;
+            if (version != null) {
+                try {
+                    version.close();
+                } catch (Exception e) {
+                    log.warn("Error closing version for cache {}", slot.definition.getName(), e);
+                }
+            }
+        }
+        inst.slots.clear();
+    }
+
     // ── Builder ──────────────────────────────────────────────────────────────
 
     /**
@@ -815,6 +875,7 @@ public final class CacheManager {
         private int memoryCacheSize = 0;
         private String chronicleAverageKey = "key-00000000";
         private int indexShardCount = 16;
+        private boolean useChronicleMap = false;
 
         /**
          * Create a new builder for the given base path.
@@ -884,6 +945,18 @@ public final class CacheManager {
             return this;
         }
 
+
+        /**
+         * Enables or disables ChronicleMap usage for the off-heap index.
+         *
+         * @param v true to use ChronicleMap, false to use in-memory map
+         * @return this builder
+         */
+        public Builder useChronicleMap(boolean v) {
+            this.useChronicleMap = v;
+            return this;
+        }
+
         /**
          * Sets number of ChronicleMap index shards.
          * Increase this value for very large keysets on Windows to stay below mmap file limits.
@@ -907,7 +980,7 @@ public final class CacheManager {
                     basePath, shardCapacity,
                     defaultMaxKeyBytes, defaultMaxValueBytes,
                     memoryCacheSize, chronicleAverageKey,
-                    indexShardCount
+                    indexShardCount, useChronicleMap
             );
         }
     }

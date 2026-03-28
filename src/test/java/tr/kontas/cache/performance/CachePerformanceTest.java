@@ -45,8 +45,6 @@ public class CachePerformanceTest {
             1_000_000,
             5_000_000,
             10_000_000,
-            50_000_000,
-            100_000_000
     };
 
     // JMX beans for GC and OS monitoring
@@ -73,7 +71,7 @@ public class CachePerformanceTest {
                 .memoryCacheSize(0)
                 .defaultMaxKeyBytes(32)
                 .defaultMaxValueBytes(256)
-                .indexShardCount(16)
+                .indexShardCount(64)
                 .chronicleAverageKey("key-00000000");
 
         CacheManager.initialize(builder);
