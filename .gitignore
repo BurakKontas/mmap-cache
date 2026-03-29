@@ -37,3 +37,7 @@ build/
 
 ### Mac OS ###
 .DS_Store
+
+### Benchmark results ###
+results/
+benchmark-cache-dir/

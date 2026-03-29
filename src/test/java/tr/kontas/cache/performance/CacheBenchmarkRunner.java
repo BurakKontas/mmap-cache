@@ -46,37 +46,35 @@ public class CacheBenchmarkRunner {
     // PARAMETRE UZAYI
     // =========================================================================
 
-    static final int[] SIZES = {1_000, 10_000, 100_000, 1_000_000, 10_000_000};
+    static final int[] SIZES = {100_000, 1_000_000, 10_000_000};
     static final int[] SHARD_CAPS = {100_000, 500_000};
-    static final int[] INDEX_SHARDS = {32, 64, 128};
+    static final int[] INDEX_SHARDS = {128, 256};
     static final String[] PATTERNS = {"UNIFORM", "HOT_80_20"};
-    static final int[] HIT_RATES = {100};
-    static final int[] VALUE_SIZES = {256};
+    static final int[] HIT_RATES = {50, 99};
+    static final int[] VALUE_SIZES = {128, 4096};
     static final int[] MEM_CACHE_SIZES = {0, 10_000};
     static final boolean[] ALLOC_GARBAGE = {false, true};
     static final boolean[] USE_CHRONICLE = {true, false};
-    static final int[] THREAD_COUNTS = {1, 4, 8};
+    static final int[] THREAD_COUNTS = {1, 8, 32};
 
     // =========================================================================
     // ZAMANLAMA
     // =========================================================================
 
-    /**
-     * Warmup süresi — sonuçlara dahil edilmez
-     */
+    /** Warmup süresi — sonuçlara dahil edilmez */
     static final int WARMUP_SECONDS = 5;
-    /**
-     * Ölçüm süresi — sonuçlara dahil edilir
-     */
+    /** Ölçüm süresi — sonuçlara dahil edilir */
     static final int MEASURE_SECONDS = 15;
-    /**
-     * Her thread'in tutabileceği max örnek sayısı (reservoir)
-     */
-    static final int SAMPLES_PER_THREAD = 200_000;
-    /**
-     * Reload kaç kez tekrar edilsin
-     */
+    /** Her thread'in tutabileceği max örnek sayısı (reservoir) */
+    static final int SAMPLES_PER_THREAD = 500_000;
+    /** Reload kaç kez tekrar edilsin */
     static final int RELOAD_REPS = 3;
+
+    /**
+     * GC'ye temizlik için verilen bekleme süresi (ms).
+     * System.gc() bir öneri — G1GC'nin tamamlaması için yeterli süre bırakıyoruz.
+     */
+    static final int GC_SETTLE_MS = 1_000;
 
     static final String CACHE_NAME = "benchCache";
 
@@ -104,6 +102,7 @@ public class CacheBenchmarkRunner {
     public static void main(String[] args) throws Exception {
         List<Config> all = buildConfigs();
         System.out.printf("Toplam kombinasyon: %d%n%n", all.size());
+        long totalRunDuration = 0;
 
         int ran = 0, skipped = 0, failed = 0;
         for (int i = 0; i < all.size(); i++) {
@@ -117,6 +116,7 @@ public class CacheBenchmarkRunner {
             }
 
             System.out.printf("%n[%d/%d] START %s%n", i + 1, all.size(), key);
+            long testStart = System.currentTimeMillis();
             try {
                 runOne(cfg);
                 ran++;
@@ -125,10 +125,39 @@ public class CacheBenchmarkRunner {
                 failed++;
                 System.err.printf("[%d/%d] FAIL  %s — %s%n", i + 1, all.size(), key, e.getMessage());
                 e.printStackTrace(System.err);
+            } finally {
+                long testDuration = System.currentTimeMillis() - testStart;
+                totalRunDuration += testDuration;
+
+                int completed = ran + failed;
+                int remaining = all.size() - (completed + skipped);
+                if (completed > 0) {
+                    long avgMs = totalRunDuration / completed;
+                    long etaMs = avgMs * remaining;
+                    String etaStr = formatDuration(etaMs);
+                    System.out.printf("  (ETA: %s)%n", etaStr);
+                } else {
+                    System.out.println("  (ETA: hesaplanamıyor)");
+                }
             }
         }
 
         System.out.printf("%nBitti. Çalıştırılan=%d  Atlanan=%d  Hata=%d%n", ran, skipped, failed);
+    }
+
+    private static String formatDuration(long millis) {
+        long seconds = millis / 1000;
+        long minutes = seconds / 60;
+        long hours = minutes / 60;
+        seconds %= 60;
+        minutes %= 60;
+        if (hours > 0) {
+            return String.format("%dh %dm %ds", hours, minutes, seconds);
+        } else if (minutes > 0) {
+            return String.format("%dm %ds", minutes, seconds);
+        } else {
+            return String.format("%ds", seconds);
+        }
     }
 
     // =========================================================================
@@ -159,11 +188,27 @@ public class CacheBenchmarkRunner {
     static void runOne(Config cfg) throws Exception {
 
         CacheManager.closeAll();
-
         deleteDirectoryRecursively(CACHE_DIR);
 
+        // -----------------------------------------------------------------
+        // HEAP ÖLÇÜMÜ — ADIM 1: Baseline (cache YOK, GC temizledi)
+        //
+        // Neden System.gc() + sleep?
+        //   - Önceki kombinasyondan kalan nesneler G1GC tarafından henüz
+        //     toplanmamış olabilir.
+        //   - System.gc() bir "öneri" — G1GC mixed/full GC döngüsünü
+        //     tetikler ama garantilemez. GC_SETTLE_MS bekliyoruz ki
+        //     tamamlansın.
+        //   - Bu sayede heapBefore ≈ "JVM altyapısı + index metadata"
+        //     olur; benchmark array'leri ve önceki cache nesneleri dahil
+        //     değildir.
+        // -----------------------------------------------------------------
+        forceGcAndWait();
         GcSnapshot gcBefore = GcSnapshot.take();
 
+        // -----------------------------------------------------------------
+        // Cache'i yükle — heap farkı = cache'in gerçek heap maliyeti
+        // -----------------------------------------------------------------
         CacheManager.initialize(
                 CacheManager.builder(CACHE_DIR)
                         .shardCapacity(cfg.shardCapacity)
@@ -178,19 +223,38 @@ public class CacheBenchmarkRunner {
                 .keyExtractor(CacheRow::getKey)
                 .serializer(CacheDefinition.defaultSerializer())
                 .deserializer(CacheDefinition.defaultDeserializer(s -> s))
+                .dynamicSizing(true)
                 .ttl(Duration.ofHours(1))
                 .build();
 
         CacheManager.register(def);
         validate(cfg);
 
-        // ── WARMUP ───────────────────────────────────────────────────────────
+        // -----------------------------------------------------------------
+        // HEAP ÖLÇÜMÜ — ADIM 2: Cache yüklendi, benchmark array'leri YOK
+        //
+        // GC çalıştırıyoruz ki yükleme sırasında oluşan geçici nesneler
+        // (Stream pipeline, serializasyon buffer'ları vb.) temizlensin.
+        // Kalan heap ≈ cache'in gerçek heap izi.
+        //
+        // ChronicleMap: değerler off-heap'te → fark küçük olmalı
+        //               (sadece index + segment metadata heap'te)
+        // In-Heap:      her değer heap'te → fark büyük olmalı
+        // -----------------------------------------------------------------
+        forceGcAndWait();
+        long heapAfterCacheLoad = currentHeapUsed();
+
+        // -----------------------------------------------------------------
+        // WARMUP
+        // -----------------------------------------------------------------
         System.out.printf("  warmup %ds (%d thread)... ", WARMUP_SECONDS, cfg.threads);
         System.out.flush();
-        runPhase(cfg, WARMUP_SECONDS);   // sonuç kullanılmıyor
+        runPhase(cfg, WARMUP_SECONDS);
         System.out.println("ok");
 
-        // ── MEASUREMENT ──────────────────────────────────────────────────────
+        // -----------------------------------------------------------------
+        // MEASUREMENT
+        // -----------------------------------------------------------------
         System.out.printf("  measure %ds (%d thread)... ", MEASURE_SECONDS, cfg.threads);
         System.out.flush();
         PhaseResult read = runPhase(cfg, MEASURE_SECONDS);
@@ -200,7 +264,18 @@ public class CacheBenchmarkRunner {
                 read.stats.p99Ns / 1_000.0,
                 read.stats.throughputOpsPerSec);
 
-        // ── RELOAD ───────────────────────────────────────────────────────────
+        // -----------------------------------------------------------------
+        // HEAP ÖLÇÜMÜ — ADIM 3: Benchmark yükü altında heap
+        //
+        // Benchmark bitti ama threadSamples array'leri hâlâ hayatta.
+        // Bu değer "yük altında JVM heap kullanımı"nı gösterir.
+        // Bunu ayrı bir sütun olarak kaydediyoruz ki karıştırmayalım.
+        // -----------------------------------------------------------------
+        long heapUnderLoad = currentHeapUsed();
+
+        // -----------------------------------------------------------------
+        // RELOAD
+        // -----------------------------------------------------------------
         System.out.printf("  reload x%d... ", RELOAD_REPS);
         System.out.flush();
         long[] reloadNs = new long[RELOAD_REPS];
@@ -209,26 +284,53 @@ public class CacheBenchmarkRunner {
             CacheManager.reload(CACHE_NAME);
             reloadNs[i] = System.nanoTime() - t0;
         }
-        Stats reloadStats = Stats.compute(reloadNs, RELOAD_REPS, RELOAD_REPS * /* ortalama ms */ 1);
+        Stats reloadStats = Stats.compute(reloadNs, RELOAD_REPS, RELOAD_REPS);
         System.out.printf("ok  avg=%.1fms%n", reloadStats.avgNs / 1_000_000.0);
 
-        // ── GC / heap bitiş ──────────────────────────────────────────────────
+        // -----------------------------------------------------------------
+        // GC & Disk metrikleri
+        //
+        // gcAfter: benchmark bittikten sonra GC çalıştırıyoruz.
+        // gcCountDelta / gcTimeDelta: warmup + measure boyunca toplanan GC.
+        // -----------------------------------------------------------------
+        forceGcAndWait();
         GcSnapshot gcAfter = GcSnapshot.take();
+
         long diskSize = dirSize(CACHE_DIR);
         long chronicleSize = chronicleSize(CACHE_DIR, cfg.useChronicleMap);
 
-        // ── KAYDETME SIRASI: önce veri, sonra checkpoint ─────────────────────
+        // -----------------------------------------------------------------
+        // KAYDETME: önce veri, sonra checkpoint
+        // -----------------------------------------------------------------
         Csv.appendResult(cfg, read.stats, reloadStats, read.ops);
-        Csv.appendMetrics(cfg, gcBefore, gcAfter, diskSize, chronicleSize);
+        Csv.appendMetrics(cfg, gcBefore, gcAfter,
+                heapAfterCacheLoad, heapUnderLoad,
+                diskSize, chronicleSize);
 
-        // ── Kapat ────────────────────────────────────────────────────────────
-//        try {
-//            CacheManager.shutdown();
-//        } catch (Exception ignored) {
-//        }
-
-        // ── Checkpoint en son ────────────────────────────────────────────────
         Checkpoint.markDone(cfg.key());
+    }
+
+    // =========================================================================
+    // GC YARDIMCILARI
+    // =========================================================================
+
+    /**
+     * G1GC'ye mixed/full cycle için öneri gönderir ve tamamlanması için bekler.
+     * İki kez çağrı: ilk System.gc() young-gen'i temizler, ikincisi
+     * büyük nesnelerin (humongous) toplanmasını zorlar.
+     */
+    static void forceGcAndWait() throws InterruptedException {
+        System.gc();
+        System.gc(); // G1 bazen iki tura ihtiyaç duyar
+        Thread.sleep(GC_SETTLE_MS);
+    }
+
+    /**
+     * Şu anki heap kullanımını byte cinsinden döner.
+     * totalMemory() - freeMemory() = canlı nesnelerin kapladığı heap.
+     */
+    static long currentHeapUsed() {
+        return Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
     }
 
     // =========================================================================
@@ -242,23 +344,21 @@ public class CacheBenchmarkRunner {
      */
     static PhaseResult runPhase(Config cfg, int durationSecs) throws Exception {
         int threads = cfg.threads;
-        long endNs = System.nanoTime() + durationSecs * 1_000_000_000L;
         AtomicBoolean running = new AtomicBoolean(true);
 
-        // Her thread'in kendi örnek dizisi — paylaşımlı bellek yok
         long[][] threadSamples = new long[threads][SAMPLES_PER_THREAD];
         long[] threadCounts = new long[threads];
         long[] threadOps = new long[threads];
         long[] threadErrors = new long[threads];
 
-        CyclicBarrier barrier = new CyclicBarrier(threads + 1); // +1 = main thread
+        CyclicBarrier barrier = new CyclicBarrier(threads + 1);
         ExecutorService pool = Executors.newFixedThreadPool(threads);
 
         for (int t = 0; t < threads; t++) {
             final int tid = t;
             pool.submit(() -> {
                 try {
-                    barrier.await(); // tüm thread'ler hazır olana kadar bekle
+                    barrier.await();
                 } catch (Exception e) {
                     return;
                 }
@@ -280,23 +380,19 @@ public class CacheBenchmarkRunner {
 
                     ops++;
 
-                    // Doğruluk kontrolü
                     if (key.startsWith("key-")) {
                         if (val == null || !val.equals(generateValue(cfg, idx))) errors++;
                     }
 
-                    // Reservoir sampling (thread-local)
                     if (sampleIdx < SAMPLES_PER_THREAD) {
                         samples[(int) sampleIdx] = ns;
                         sampleIdx++;
                     } else {
-                        // Knuth reservoir: eski bir yeri olasılıksal üzerine yaz
                         long r = (rng.nextLong() & Long.MAX_VALUE) % (sampleIdx + 1);
                         if (r < SAMPLES_PER_THREAD) samples[(int) r] = ns;
                         sampleIdx++;
                     }
 
-                    // GC basıncı simülasyonu
                     if (waste != null) sink(waste);
                 }
 
@@ -306,11 +402,9 @@ public class CacheBenchmarkRunner {
             });
         }
 
-        // Tüm thread'leri aynı anda başlat
         barrier.await();
         long phaseStart = System.nanoTime();
 
-        // Süre dolunca durdur
         Thread.sleep(durationSecs * 1_000L);
         running.set(false);
 
@@ -325,7 +419,6 @@ public class CacheBenchmarkRunner {
             throw new IllegalStateException("Veri tutarsızlığı! errors=" + totalErrors);
         }
 
-        // Thread örneklerini birleştir
         int totalSamples = (int) Arrays.stream(threadCounts).sum();
         long[] merged = new long[totalSamples];
         int offset = 0;
@@ -447,7 +540,7 @@ public class CacheBenchmarkRunner {
     }
 
     // =========================================================================
-    // STATS — tüm hesaplamalar burada
+    // STATS
     // =========================================================================
 
     static class Stats {
@@ -477,9 +570,9 @@ public class CacheBenchmarkRunner {
             long[] sorted = Arrays.copyOf(samples, count);
             Arrays.sort(sorted);
 
-            long p50 = sorted[(int) (count * 0.500)];
-            long p90 = sorted[(int) (count * 0.900)];
-            long p99 = sorted[(int) (count * 0.990)];
+            long p50  = sorted[(int) (count * 0.500)];
+            long p90  = sorted[(int) (count * 0.900)];
+            long p99  = sorted[(int) (count * 0.990)];
             long p999 = sorted[(int) Math.min(count * 0.999, count - 1)];
 
             double tps = durationNs > 0
@@ -505,26 +598,20 @@ public class CacheBenchmarkRunner {
             this.heapUsedBytes = heapUsedBytes;
         }
 
+        /**
+         * Snapshot alır. forceGcAndWait() ÇAĞRILDIKTAN SONRA kullanılmalı —
+         * aksi hâlde ölçüm anlamsız olur.
+         */
         static GcSnapshot take() {
             List<GarbageCollectorMXBean> beans = ManagementFactory.getGarbageCollectorMXBeans();
             long count = beans.stream().mapToLong(GarbageCollectorMXBean::getCollectionCount).sum();
-            long time = beans.stream().mapToLong(GarbageCollectorMXBean::getCollectionTime).sum();
-            Runtime rt = Runtime.getRuntime();
-            long heap = rt.totalMemory() - rt.freeMemory();
+            long time  = beans.stream().mapToLong(GarbageCollectorMXBean::getCollectionTime).sum();
+            long heap  = currentHeapUsed();
             return new GcSnapshot(count, time, heap);
         }
 
-        long gcCountDelta(GcSnapshot before) {
-            return gcCount - before.gcCount;
-        }
-
-        long gcTimeDelta(GcSnapshot before) {
-            return gcTimeMs - before.gcTimeMs;
-        }
-
-        long heapDelta(GcSnapshot before) {
-            return heapUsedBytes - before.heapUsedBytes;
-        }
+        long gcCountDelta(GcSnapshot before) { return gcCount   - before.gcCount; }
+        long gcTimeDelta(GcSnapshot before)  { return gcTimeMs  - before.gcTimeMs; }
     }
 
     // =========================================================================
@@ -537,10 +624,6 @@ public class CacheBenchmarkRunner {
             return Files.exists(doneFile(key));
         }
 
-        /**
-         * Atomik write: önce .tmp, sonra ATOMIC_MOVE → .done
-         * Yarım kalan dosya "tamamlandı" gibi algılanmaz.
-         */
         static void markDone(String key) {
             Path target = doneFile(key);
             Path tmp = CHECKPOINT_DIR.resolve(key + ".tmp");
@@ -591,7 +674,6 @@ public class CacheBenchmarkRunner {
 
                     w.write(Instant.now().toString());
                     w.write("," + cfg.key());
-                    // Parametre sütunları (post-processing için ayrı ayrı)
                     w.write("," + cfg.size);
                     w.write("," + cfg.shardCapacity);
                     w.write("," + cfg.indexShardCount);
@@ -602,7 +684,6 @@ public class CacheBenchmarkRunner {
                     w.write("," + cfg.allocateGarbage);
                     w.write("," + cfg.useChronicleMap);
                     w.write("," + cfg.threads);
-                    // Sonuçlar
                     w.write("," + ops);
                     w.write("," + read.avgNs);
                     w.write("," + read.p50Ns);
@@ -610,7 +691,6 @@ public class CacheBenchmarkRunner {
                     w.write("," + read.p99Ns);
                     w.write("," + read.p999Ns);
                     w.write(String.format(Locale.US, ",%.1f", read.throughputOpsPerSec));
-                    // Reload (ms cinsinden — reload saniyeler mertebesinde)
                     w.write(String.format(Locale.US, ",%.3f", reload.avgNs / 1_000_000.0));
                     w.write(String.format(Locale.US, ",%.3f", reload.p99Ns / 1_000_000.0));
                     w.newLine();
@@ -621,17 +701,40 @@ public class CacheBenchmarkRunner {
         }
 
         // ── Metrics CSV ──────────────────────────────────────────────────────
+        //
+        // Yeni sütunlar:
+        //   heapUsedBefore    → GC sonrası baseline (cache yok)
+        //   heapAfterLoad     → Cache yüklendi, GC temizledi, benchmark array'leri yok
+        //                       ChronicleMap ise küçük, In-Heap ise büyük olmalı
+        //   heapCacheDelta    → heapAfterLoad - heapUsedBefore = cache'in gerçek heap izi
+        //   heapUnderLoad     → Benchmark çalışırken heap (threadSamples dahil)
+        //   heapMax           → JVM max heap (-Xmx)
+        //   gcCountDelta      → Tüm test boyunca toplanan GC sayısı
+        //   gcTimeDeltaMs     → Tüm test boyunca GC'de geçen süre (ms)
+        //   diskSizeBytes     → Cache dizininin toplam disk boyutu
+        //   chronicleMapBytes → Sadece .cfs dosyalarının boyutu
+        // -----------------------------------------------------------------
 
         static final String METRICS_HEADER = String.join(",",
                 "timestamp", "key",
-                "heapUsedBefore", "heapUsedAfter", "heapMax",
+                "heapUsedBefore",
+                "heapAfterLoad",
+                "heapCacheDelta",
+                "heapUnderLoad",
+                "heapMax",
                 "gcCountDelta", "gcTimeDeltaMs",
                 "diskSizeBytes", "chronicleMapBytes"
         );
 
         static void appendMetrics(Config cfg,
-                                  GcSnapshot before, GcSnapshot after,
-                                  long diskSize, long chronicleSize) {
+                                  GcSnapshot gcBefore,
+                                  GcSnapshot gcAfter,
+                                  long heapAfterLoad,
+                                  long heapUnderLoad,
+                                  long diskSize,
+                                  long chronicleSize) {
+            long heapCacheDelta = heapAfterLoad - gcBefore.heapUsedBytes;
+
             synchronized (WRITE_LOCK) {
                 boolean needHeader = !Files.exists(METRICS_CSV);
                 try (BufferedWriter w = Files.newBufferedWriter(METRICS_CSV, StandardCharsets.UTF_8,
@@ -643,11 +746,13 @@ public class CacheBenchmarkRunner {
 
                     w.write(Instant.now().toString());
                     w.write("," + cfg.key());
-                    w.write("," + before.heapUsedBytes);
-                    w.write("," + after.heapUsedBytes);
+                    w.write("," + gcBefore.heapUsedBytes);
+                    w.write("," + heapAfterLoad);
+                    w.write("," + heapCacheDelta);
+                    w.write("," + heapUnderLoad);
                     w.write("," + Runtime.getRuntime().maxMemory());
-                    w.write("," + after.gcCountDelta(before));
-                    w.write("," + after.gcTimeDelta(before));
+                    w.write("," + gcAfter.gcCountDelta(gcBefore));
+                    w.write("," + gcAfter.gcTimeDelta(gcBefore));
                     w.write("," + diskSize);
                     w.write("," + chronicleSize);
                     w.newLine();
@@ -667,11 +772,8 @@ public class CacheBenchmarkRunner {
         try (Stream<Path> walk = Files.walk(dir)) {
             return walk.filter(Files::isRegularFile)
                     .mapToLong(p -> {
-                        try {
-                            return Files.size(p);
-                        } catch (IOException e) {
-                            return 0;
-                        }
+                        try { return Files.size(p); }
+                        catch (IOException e) { return 0; }
                     })
                     .sum();
         } catch (IOException e) {
@@ -684,11 +786,8 @@ public class CacheBenchmarkRunner {
         try (Stream<Path> walk = Files.walk(dir)) {
             return walk.filter(p -> p.toString().endsWith(".cfs"))
                     .mapToLong(p -> {
-                        try {
-                            return Files.size(p);
-                        } catch (IOException e) {
-                            return 0;
-                        }
+                        try { return Files.size(p); }
+                        catch (IOException e) { return 0; }
                     })
                     .sum();
         } catch (IOException e) {
@@ -696,19 +795,14 @@ public class CacheBenchmarkRunner {
         }
     }
 
-    static void deleteDir(Path dir) {
-        CacheManager.purgeStaleVersions(dir);
-    }
-
     static void deleteDirectoryRecursively(Path dir) throws IOException {
         if (Files.exists(dir)) {
             Files.walk(dir)
                     .sorted(Comparator.reverseOrder())
                     .forEach(p -> {
-                        try {
-                            Files.deleteIfExists(p);
-                        } catch (IOException e) {
-                            System.err.println("Failed to delete: " + p + " – " + e.getMessage());
+                        try { Files.deleteIfExists(p); }
+                        catch (IOException e) {
+                            System.err.println("Silinemedi: " + p + " – " + e.getMessage());
                         }
                     });
         }
@@ -726,9 +820,6 @@ public class CacheBenchmarkRunner {
     // YARDIMCI — GC BASKISINI GERÇEK KIL
     // =========================================================================
 
-    /**
-     * JIT'in waste array'ini optimize etmesini engeller
-     */
     static volatile long blackhole = 0;
 
     static void sink(byte[] arr) {
