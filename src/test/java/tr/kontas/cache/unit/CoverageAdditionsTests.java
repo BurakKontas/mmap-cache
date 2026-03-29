@@ -57,10 +57,10 @@ class CoverageAdditionsTests {
         Path tmp = Files.createTempDirectory("fcm_test");
         Path idx = tmp.resolve("index.chm");
 
-        Method m = CacheManager.class.getDeclaredMethod("buildChronicleIndex", java.nio.file.Path.class, int.class, String.class, int.class);
+        Method m = CacheManager.class.getDeclaredMethod("buildChronicleIndex", java.nio.file.Path.class, int.class, String.class, int.class, boolean.class);
         m.setAccessible(true);
         @SuppressWarnings("unchecked")
-        Map<String, CacheLocation> map = (Map<String, CacheLocation>) m.invoke(null, idx, 1, "k-0", 3);
+        Map<String, CacheLocation> map = (Map<String, CacheLocation>) m.invoke(null, idx, 1, "k-0", 3, false);
         assertNotNull(map);
         if (map instanceof Closeable) {
             ((Closeable) map).close();
